@@ -6,7 +6,7 @@ using Xunit;
 /// <summary>
 /// OpenCode sessions through the background service's local API: a fake handler answers /api/session and the mapping
 /// to the widget's sessions (name, project, busy/idle, outcome, tokens) is checked, on the native service and a WSL
-/// one alike. Nothing here — or in the reader — ever opens a database.
+/// one alike.
 /// </summary>
 public sealed class OpenCodeSessionsTests : IDisposable
 {

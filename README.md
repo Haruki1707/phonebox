@@ -48,7 +48,7 @@ their own layouts, or switch one phone between paired computers.
 | Use it for | What appears on the phone |
 |---|---|
 | **PC monitoring** | CPU, GPU, RAM, disks, network and ping; charts, GPU details and process controls |
-| **AI coding** | Claude, Codex and Antigravity quotas, reset times and burn-rate forecasts; local Claude Code, Codex and OpenCode sessions (OpenCode native and inside WSL); GitHub reviews and CI status |
+| **AI coding** | Claude, Codex, Antigravity and OpenRouter quotas, reset times and burn-rate forecasts; local Claude Code, Codex and OpenCode sessions (OpenCode native and inside WSL); GitHub reviews and CI status |
 | **Touch controls** | App and URL shortcuts, key combinations and macros; application audio, microphone, media, OBS and system controls through [Control Deck](docs/CONTROL-DECK.md) |
 | **Everyday use** | Now Playing, internet radio, clocks, weather, calendars, notes, checklists, pomodoro and timers |
 | **Automation** | Webhook values and notifications, Home Assistant controls and rules that react to activity on the computer |

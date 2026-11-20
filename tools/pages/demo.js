@@ -148,6 +148,11 @@
     { tool: 'Run a command', detail: 'git push origin main --force-with-lease', description: 'Push the rebased branch', project: 'api-gateway' },
     { tool: 'Edit a file', detail: 'src/routes/billing.ts\n\n  export const limit = rateLimit({ windowMs: 60_000, max: 120 })', description: '', project: 'docs-site' },
     { tool: 'Fetch a web page', detail: 'https://docs.github.com/en/rest/pulls', description: '', project: 'blog-engine' },
+    // OpenCode asks through its background service and also takes an Allow always (it saves the pattern for the project)
+    { tool: 'Run a command', detail: 'docker compose up -d --build', description: '', project: 'web-shop', source: 'OpenCode', always: true },
+    // OpenCode agent questions arrive as a form: the phone can tap an answer or, with "custom", type its own
+    { tool: 'Which route should we take?', detail: 'The rebase is done; where should the branch go next?', kind: 'question', project: 'api-gateway', source: 'OpenCode',
+      options: [{ value: 'Route A - fast', label: 'Route A - fast', description: 'Fastest option' }, { value: 'Route B - safe', label: 'Route B - safe', description: 'Safest option' }, { value: 'Route C - cheap', label: 'Route C - cheap', description: 'Cheapest option' }], custom: true },
   ];
   function ask(sample, broadcast = true) {
     const s = sample || SAMPLE_PROMPTS[Math.floor(Math.random() * SAMPLE_PROMPTS.length)];
@@ -284,6 +289,8 @@
         codex: { model: 'Demo coding model', effort: 'high', totalTokens: 187000, totalInput: 150000, totalOutput: 37000, totalCached: 90000, totalReasoning: 12000, lastInput: 42000, contextWindow: 256000 }, limits: [
         { label: '5-hour session', percent: 12, resetsAt: n + 4.1 * 3600e3, windowSec: 18000 },
         { label: 'Weekly', percent: 27, resetsAt: n + 5.5 * 86400e3, windowSec: 604800 }] },
+      { id: 'openrouter', name: 'OpenRouter', plan: 'Prepaid', updatedAt: n - 240e3, extra: '$61.40 of $100.00 left', error: null, codex: null, source: 'local', limits: [
+        { label: 'Credits', percent: 39, resetsAt: null, windowSec: null }] },
     ] };
   }
 
@@ -292,12 +299,12 @@
     const s = (i, tool, name, status, mins, waitingFor = null) => ({ id: `${tool}:${i}`, tool, name, project: name, status, waitingFor, since: n - mins * 60e3, startedAt: n - 3 * 3600e3,
       pid: 4000 + i * 211, outcome: null, model: null, effort: null, totalTokens: null, inputTokens: null, outputTokens: null, cachedInputTokens: null, reasoningTokens: null,
       lastInputTokens: null, contextWindow: null, lastTool: null, turnStartedAt: null,
-      ...(tool === 'codex' ? { model: 'Demo coding model', effort: 'high', totalTokens: 187000, inputTokens: 150000, outputTokens: 37000, cachedInputTokens: 90000, reasoningTokens: 12000, lastInputTokens: 42000, contextWindow: 256000, lastTool: 'read', turnStartedAt: n - 45000 } : {}) });
+      ...(tool === 'codex' || tool === 'opencode' ? { model: 'Demo coding model', effort: 'high', totalTokens: 187000, inputTokens: 150000, outputTokens: 37000, cachedInputTokens: 90000, reasoningTokens: 12000, lastInputTokens: 42000, contextWindow: 256000, lastTool: 'read', turnStartedAt: n - 45000 } : {}) });
     const pr = (repo, number, title, ci = null, review = null, draft = false, author = null) => ({ repo, number, title, ci, review, draft, author, updated: n - (number % 9 + 1) * 3600e3 });
     return {
       sessions: [s(1, 'claude', 'api-gateway', 'busy', 4), s(2, 'claude', 'docs-site', 'waiting', 2, 'approve a file edit'), s(3, 'codex', 'mobile-app', 'busy', 11),
         s(4, 'claude', 'infra', 'shell', 1), s(5, 'claude', 'blog-engine', 'idle', 38), s(6, 'codex', 'data-pipeline', 'idle', 74), s(7, 'claude', 'design-system', 'idle', 125),
-        s(8, 'cursor', 'phonebox', 'busy', 3), s(9, 'cursor', 'fueltrack', 'idle', 1)],
+        s(8, 'cursor', 'phonebox', 'busy', 3), s(9, 'cursor', 'fueltrack', 'idle', 1), s(10, 'opencode', 'phonebox-quiet-lagoon', 'busy', 2)],
       github: { user: 'octocat', notifications: 7, error: null, updatedAt: n - 90e3,
         reviewRequests: [pr('acme/api', 412, 'Rate limiter for public endpoints', null, null, false, 'hubot'), pr('acme/web', 1288, 'Dark mode for the dashboard', null, null, false, 'monalisa'),
           pr('acme/infra', 77, 'Move staging to a new region', null, null, false, 'hubot')],

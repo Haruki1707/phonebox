@@ -21,13 +21,19 @@
   `config.json` leaves every prompt to OpenCode's own window. OpenCode's agent questions ("route A, B or C, or type
   your own") ride the same card: the answers appear as buttons, a custom answer gets a text field, and the pick is
   sent straight back to OpenCode.
-- **OpenCode sessions — native and inside WSL — through the service's own API.** The sessions widget no longer opens
-  OpenCode's SQLite database: it reads the same local HTTP API the desktop app uses (authenticated with the password
-  from `service.json`, which never leaves the computer), so no database file can be locked by a running OpenCode and
-  sessions inside WSL distros reach the phone exactly like native ones. **Permission prompts and agent questions**
-  now come from every running service too — native and WSL side by side, each answer going back to the service that
-  asked. **Also watch OpenCode in WSL** (on by default, in Settings › General › OpenCode prompts) turns the WSL half
+- **OpenCode sessions — native and inside WSL — through the service's own API.** The sessions widget reads the same
+  local HTTP API the desktop app uses (authenticated with the password from `service.json`, which never leaves the
+  computer), so sessions inside WSL distros reach the phone exactly like native ones. **Permission prompts and agent
+  questions** now come from every running service too — native and WSL side by side, each answer going back to the
+  service that asked. **Also watch OpenCode in WSL** (on by default, in Settings › General › OpenCode prompts) turns the WSL half
   off; stopped distros are never started for a check.
+- **OpenRouter credits on the quota ring.** With **OpenRouter** ticked under the tracked AI services, the quota ring
+  shows whichever spending cap leaves the least — the account's prepaid credits, the workspace's budget guardrail
+  (with its reset line and pace marker) or the key's own spending cap — with the dollars still left in the card's
+  footer. Refreshed every 3 minutes from openrouter.ai (the credits and key endpoints; a refused account balance
+  leaves the other two caps standing). The API key is pasted in Settings › General › AI quotas and stays in
+  `config.json` on this computer (env var and legacy auth.json as fallbacks), and the key is only ever sent to
+  openrouter.ai.
 
 ## 0.9.22 — 2026-11-19
 

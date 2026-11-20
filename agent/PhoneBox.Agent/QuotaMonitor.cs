@@ -31,6 +31,8 @@ public sealed record QuotaProvider(string Id, string Name, string Plan, IReadOnl
 ///    Claude Code refreshes it itself (refreshing it here could break Claude Code's session).
 ///  - Codex: the last "rate_limits" record in the newest rollout file under ~/.codex/sessions (fully local).
 ///  - Antigravity: a running local server, or the signed-in agy CLI's structured /usage command.
+///  - OpenRouter: openrouter.ai/api/v1/credits with the API key from the settings (or the OPENROUTER_API_KEY
+///    environment variable, or legacy auth.json); prepaid credits, so the ring is the share spent.
 /// </summary>
 public sealed partial class QuotaMonitor(ConfigStore config, ILogger<QuotaMonitor> log) : BackgroundService
 {
@@ -170,22 +172,24 @@ public sealed partial class QuotaMonitor(ConfigStore config, ILogger<QuotaMonito
     private volatile QuotaOverview? _overview;
 
     /// <summary>Seeds quota state in unit tests without running background loops.</summary>
-    internal void SetStateForTest(QuotaProvider? claude = null, IReadOnlyList<QuotaProvider>? external = null)
+    internal void SetStateForTest(QuotaProvider? claude = null, IReadOnlyList<QuotaProvider>? external = null, QuotaProvider? openrouter = null)
     {
         _claude = claude;
         if (external is not null) _external = external;
+        if (openrouter is not null) _openrouter = openrouter;
     }
 
     public IReadOnlyList<QuotaProvider> Snapshot()
     {
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var external = _external;
-        var core = new[] { "claude", "codex", "antigravity" }
-            .Select(id => CodexBar.Select(id == "claude" ? _claude : id == "codex" ? _codex : _antigravity,
+        var core = new[] { "claude", "codex", "antigravity", "openrouter" }
+            .Select(id => CodexBar.Select(
+                id == "claude" ? _claude : id == "codex" ? _codex : id == "antigravity" ? _antigravity : _openrouter,
                 external.FirstOrDefault(p => p.Id == id), now))
             .OfType<QuotaProvider>();
         var extra = external
-            .Where(p => p.Id is not ("claude" or "codex" or "antigravity"))
+            .Where(p => p.Id is not ("claude" or "codex" or "antigravity" or "openrouter"))
             .Select(p => CodexBar.Select(null, p, now))
             .OfType<QuotaProvider>();
         return core.Concat(extra).Select(p => Rolled(p, now)).ToList();
@@ -336,6 +340,13 @@ public sealed partial class QuotaMonitor(ConfigStore config, ILogger<QuotaMonito
             {
                 var ok = await RefreshAntigravity(ct);
                 _nextAntigravity = Environment.TickCount64 + (ok ? 60_000 : 30_000);
+            }
+
+            if (Environment.TickCount64 >= _nextOpenRouter)
+            {
+                try { await OpenRouterTickAsync(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), ct); }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
+                catch (Exception ex) { log.LogWarning("openrouter quota: {Msg}", ex.Message); }
             }
 
             try { await ClaudeTickAsync(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), ct); }

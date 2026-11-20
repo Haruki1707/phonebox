@@ -44,9 +44,16 @@ Last updated: 2026-11-15 (PhoneBox 0.9.6).
   running WSL distro — for its recent sessions: the same local HTTP API the desktop app uses, authenticated with the
   password OpenCode wrote to `~/.local/state/opencode/service.json`; that password never leaves the computer. Only
   session metadata is requested (the folder, title, model, token counters, start and update times and the outcome);
-  prompts, replies and tool arguments are never fetched, OpenCode's database is not opened, and sessions older than
-  three hours are ignored. A stopped WSL distro is never started for this. The data goes only to your phone over the
-  same local USB / paired Wi-Fi link as other panel data.
+  prompts, replies and tool arguments are never fetched, and sessions older than three hours are ignored. A stopped
+  WSL distro is never started for this. The data goes only to your phone over the same local USB / paired Wi-Fi link
+  as other panel data.
+- **OpenRouter credits** (off by default; tick **OpenRouter** under the tracked AI services): every 3 minutes the
+  agent asks openrouter.ai (its credits and key endpoints) for the remaining prepaid credits and the binding spend
+  caps, using the API key pasted in **Settings › General › AI quotas** (it stays in `config.json` on this computer,
+  like the camera logins), or failing that the `OPENROUTER_API_KEY` environment variable or the auth.json OpenCode
+  kept before its v2. The key is never logged, stored by PhoneBox anywhere else or sent anywhere but openrouter.ai;
+  only the balance numbers come back and go to the phone. Untick
+  **OpenRouter** to stop it.
 - **OpenCode permission prompts:** when OpenCode's background service asks for permission, the agent reads the pending
   request from its local API (`127.0.0.1`, with the password OpenCode wrote to
   `~/.local/state/opencode/service.json`; that password is never sent anywhere). What goes to the phone is the card's
@@ -113,6 +120,7 @@ identifies your GitHub account to GitHub.
 | Album art on Linux | The artwork address your music player reports | The request to that address |
 | OSC controls (Control Deck) | The OSC host and port you configure, over UDP | The control value |
 | Antigravity quota through its CLI | Whatever the Antigravity CLI contacts with its own sign-in (PhoneBox only starts it) | Decided by the CLI |
+| OpenRouter quota | `openrouter.ai/api/v1/credits`, every 3 minutes while **OpenRouter** is ticked under the tracked AI services (the endpoint is cached server-side for about a minute, so asking sooner changes nothing); `openrouter.ai/api/v1/key` instead, only when the account balance is refused to this key and then only if the key has a spending limit | The API key pasted in **Settings › General › AI quotas** (kept in `config.json` on this computer), the `OPENROUTER_API_KEY` environment variable, or OpenCode's legacy `auth.json`; it goes only to openrouter.ai and is never logged or stored by PhoneBox. Only the balance numbers come back and go to the phone | Untick **OpenRouter** in **Settings › General** |
 | Webhooks | Inbound only: scripts and services you set up post to the agent | Nothing is sent out |
 | Setup scripts (`setup.ps1`, `setup.sh`), when you run them | `raw.githubusercontent.com` (the script), `api.github.com` and `github.com` (release info and downloads); only for what is missing and after asking: winget, Homebrew or your distribution's package servers, or `dl.google.com` (adb) | The requests themselves; nothing about you or the computer. With `gh` 2.93.0 or later signed in, the GitHub CLI checks the build provenance with its own sign-in, which also contacts `tuf-repo.github.com` and Sigstore's servers (`tuf-repo-cdn.sigstore.dev`) |
 

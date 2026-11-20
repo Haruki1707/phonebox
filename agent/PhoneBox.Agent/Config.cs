@@ -22,6 +22,8 @@ public sealed class AgentConfig
     /// <summary>Cursor agent-transcript sessions on the AI sessions widget (off by default).</summary>
     public CursorConfig Cursor { get; set; } = new();
     public OpenCodeConfig OpenCode { get; set; } = new();
+    /// <summary>The OpenRouter API key for the quota ring; a secret that stays in config.json and never goes to the phone.</summary>
+    public OpenRouterConfig OpenRouter { get; set; } = new();
     public List<PageConfig> Pages { get; set; } = [];
     public List<Shortcut> Shortcuts { get; set; } = [];
     public List<RuleConfig> Rules { get; set; } = [];
@@ -548,9 +550,11 @@ public sealed partial class ConfigStore(string path)
         c.Weather.Unit = WeatherUnitJsonConverter.Normalize(c.Weather.Unit);
         c.Weather.Model = WeatherModelJsonConverter.Normalize(c.Weather.Model);
         c.CodexBar ??= new();
-        c.CodexBar.Providers = (c.CodexBar.Providers ?? []).Where(p => p is "claude" or "codex" or "antigravity").Distinct().ToArray();
+        c.CodexBar.Providers = (c.CodexBar.Providers ?? []).Where(p => p is "claude" or "codex" or "antigravity" or "openrouter").Distinct().ToArray();
         c.CodexBar.PageSize = Math.Clamp(c.CodexBar.PageSize, 0, 6);
         c.CodexBar.RotateInterval = Math.Clamp(c.CodexBar.RotateInterval, 2, 300);
+        c.OpenRouter ??= new();
+        c.OpenRouter.ApiKey = (c.OpenRouter.ApiKey ?? "").Trim();
         c.Night ??= new();
         c.Controls ??= new();
         c.Controls.Actions ??= [];
@@ -899,6 +903,13 @@ public sealed class CodexBarConfig
     public bool Rotate { get; set; } = true;
     public int PageSize { get; set; } = 2;
     public int RotateInterval { get; set; } = 8;
+}
+
+/// <summary>The OpenRouter API key for the quota ring, pasted in Settings › General › AI quotas. A secret like the
+/// camera logins: it stays in config.json on this computer and never reaches the phone or the public config.</summary>
+public sealed class OpenRouterConfig
+{
+    public string ApiKey { get; set; } = "";
 }
 
 /// <summary>

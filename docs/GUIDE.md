@@ -123,6 +123,16 @@ CLI reports without plan metadata keep the neutral Antigravity title. Older IDE 
 through `GetUserStatus`; unavailable measurements are skipped, and weekly limits are never invented. Refresh
 failures retain the last measurements with an error.
 
+**Native OpenRouter quota** is off until **OpenRouter** is ticked under the tracked AI services in General settings.
+It polls openrouter.ai every 3 minutes and shows whichever spending cap leaves the least as the ring, with the
+dollars still left in the card's footer: the account's prepaid credits, the workspace's budget guardrail (labeled
+e.g. **Monthly budget** — it resets, so the ring gains a reset line and a pace marker) or the key's own spending
+cap. The ring turns amber when a quarter of the binding cap is left and red at a tenth. If OpenRouter refuses the
+account balance to this key, the other two caps still carry the ring. The API key is pasted in **Settings › General
+› AI quotas** and stays in `config.json` on this computer (an `OPENROUTER_API_KEY` environment variable or OpenCode's
+legacy `auth.json` work as fallbacks). The key is never logged or stored by PhoneBox anywhere else and only ever
+sent to openrouter.ai.
+
 Tap an AI session to see its model, timing and token details. Token counters describe the local session rather than
 the account allowance. Prompt/response text and tool arguments are not included in this panel data.
 
@@ -296,9 +306,9 @@ switchable ports). The panel keeps running over Wi-Fi while the USB power is off
   longer after errors and as long as a `429` asks for, across restarts too. An expired or refused token is not sent:
   PhoneBox waits until Claude Code renews it.
 - **Codex quota and sessions** are read from local files in `~/.codex/sessions`; Claude Code sessions from
-  `~/.claude/sessions`. OpenCode sessions are read from its SQLite database `~/.local/share/opencode/opencode.db`,
-  opened read-only: the session's folder, slug, model, token counters, times and outcome, never prompts, replies or
-  tool arguments (the database's account and credential tables are not touched). Cursor sessions (opt-in in
+  `~/.claude/sessions`. OpenCode sessions come from its background service's local HTTP API (the same one the
+  desktop app uses, authenticated with the password from `service.json`): the session's folder, title, model, token
+  counters, times and outcome, never prompts, replies or tool arguments. Cursor sessions (opt-in in
   **Settings › General › Cursor sessions**) come from recent agent transcripts under
   `~/.cursor/projects/*/agent-transcripts`. Only the last message's role is kept; chat text is never shown, stored or
   sent. Project names use the folder basename from Cursor's `workspaceStorage`.
