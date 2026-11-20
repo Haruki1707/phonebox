@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+**GitHub widget**
+- The GitHub widget can read the GitHub CLI inside WSL as well as on Windows. Settings > General > GitHub offers
+  **Merge Windows and WSL** (the default), **Windows only** and **WSL only**, narrowed to one distro or every running
+  one, with **Check sources** showing which installs have `gh`. Merged answers count the same pull request or
+  notification thread once; a distro that fails shows a note without hiding the others. Stopped distros are never
+  started for the check.
+
 **Settings page**
 - A waiting update shows in the header, so it is seen from every section instead of only in the Updates card far
   down General: **Update to 0.9.x** installs it, like the card's Update now. It waits while there are unsaved changes,

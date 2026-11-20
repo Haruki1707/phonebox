@@ -807,14 +807,19 @@ W.github = {
         const g = D.work?.github;
         if (!g) return;
         const rows = Math.max(1, Math.floor((box.clientHeight - 90) / 25));
-        user.textContent = g.user ? '@' + g.user : '';
+        // one account per gh install; the same login in Windows and WSL is shown once, with both sources in the tooltip
+        const accounts = g.accounts?.length ? g.accounts : (g.user ? [{ login: g.user, name: 'Windows' }] : []);
+        const logins = [...new Set(accounts.map((a) => a.login))];
+        user.textContent = logins.map((l) => '@' + l).join(' · ');
+        user.title = [...new Set(accounts.map((a) => '@' + a.login + ' — ' + (a.name || a.source)))].join('\n');
         bell.replaceChildren(rich(`🔔 ${g.notifications >= 50 ? '50+' : g.notifications}`));
         rc.textContent = g.reviewRequests.length;
         mc.textContent = g.myPrs.length;
         const nRev = Math.min(g.reviewRequests.length || 1, Math.max(1, Math.floor(rows / 2)));
         rev.replaceChildren(...(g.reviewRequests.length ? g.reviewRequests.slice(0, nRev).map((p) => prRow(p, false)) : [h('div', 'gh-pr', t('w.noReviews'))]));
         mine.replaceChildren(...(g.myPrs.length ? g.myPrs.slice(0, Math.max(1, rows - nRev)).map((p) => prRow(p, true)) : [h('div', 'gh-pr', t('w.noPrs'))]));
-        err.textContent = g.error ? 'GitHub: ' + g.error : '';
+        // one source failing shows its note while the other install's pull requests stay on screen
+        err.textContent = g.error ? 'GitHub: ' + g.error : (g.warnings?.length ? g.warnings.join(' · ') : '');
       },
     };
   },

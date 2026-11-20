@@ -126,6 +126,13 @@ failures retain the last measurements with an error.
 Tap an AI session to see its model, timing and token details. Token counters describe the local session rather than
 the account allowance. Prompt/response text and tool arguments are not included in this panel data.
 
+**GitHub** reads the GitHub CLI (`gh`): install it and run `gh auth login`. It shows the account, unread
+notifications, review requests and your open pull requests with their CI state, refreshing every three minutes.
+On Windows it can also read `gh` inside a running WSL distro, and Settings > General > GitHub chooses **Merge Windows
+and WSL** (the default), **Windows only** or **WSL only**, with one distro or every running one. Merged answers count
+the same pull request or notification thread once, whichever install it came through; a distro that fails to answer
+shows a note and the other installs keep working. Stopped distros are never started just to look for `gh`.
+
 ## Layout editor & settings
 
 Double-click the tray icon on Windows (or open <http://127.0.0.1:8765>):
@@ -142,7 +149,7 @@ Double-click the tray icon on Windows (or open <http://127.0.0.1:8765>):
   their state on the phone (mute does by itself, others from a pushed value).
 - **Webhooks**: the webhook key, copy-paste examples, test buttons and the values pushed so far.
 - **General**: weather location search, the temperature unit (°C or °F) and the forecast model; calendars (ICS links from Google, Outlook or iCloud), Home Assistant and OBS
-  connections; night mode; theme and accent colour, orientation (landscape, portrait or follow the phone), clock seconds,
+  connections; which `gh` installs feed the GitHub widget (Windows, WSL, or both); night mode; theme and accent colour, orientation (landscape, portrait or follow the phone), clock seconds,
   vibration, the message when a session finishes, volume-key paging and the phone's sensors (brightness that follows the room, the night screen when the
   room goes dark, wave to wake it); [OLED burn-in protection](#appearance); [page switching](#rules) (home page, countdown, back home after);
   kiosk options (screen pinning, the panel as the phone's home screen so it starts after a reboot, keep the phone

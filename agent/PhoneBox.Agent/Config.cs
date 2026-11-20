@@ -21,6 +21,8 @@ public sealed class AgentConfig
     public ClaudeConfig Claude { get; set; } = new();
     /// <summary>Cursor agent-transcript sessions on the AI sessions widget (off by default).</summary>
     public CursorConfig Cursor { get; set; } = new();
+    /// <summary>Which GitHub CLI installs feed the GitHub widget (Windows and/or running WSL distros).</summary>
+    public GitHubConfig GitHub { get; set; } = new();
     public List<PageConfig> Pages { get; set; } = [];
     public List<Shortcut> Shortcuts { get; set; } = [];
     public List<RuleConfig> Rules { get; set; } = [];
@@ -235,6 +237,15 @@ public sealed class CursorConfig
 {
     /// <summary>Show recent Cursor agent chats on the AI sessions widget (off by default).</summary>
     public bool Sessions { get; set; }
+}
+
+public sealed class GitHubConfig
+{
+    /// <summary>Which installs the GitHub widget reads: "auto" merges Windows and every running WSL distro,
+    /// "windows" uses only the Windows gh, "wsl" only the WSL ones.</summary>
+    public string Mode { get; set; } = "auto";
+    /// <summary>A single WSL distro to use; empty means every running distro whose default user has gh.</summary>
+    public string WslDistro { get; set; } = "";
 }
 
 public sealed class PageConfig
@@ -562,6 +573,10 @@ public sealed partial class ConfigStore(string path)
         c.Claude ??= new();
         c.Claude.TimeoutSec = Math.Clamp(c.Claude.TimeoutSec, 10, 3600);
         c.Cursor ??= new();
+        c.GitHub ??= new();
+        c.GitHub.Mode = c.GitHub.Mode is "windows" or "wsl" ? c.GitHub.Mode : "auto";
+        c.GitHub.WslDistro = (c.GitHub.WslDistro ?? "").Trim();
+        if (c.GitHub.WslDistro.Length > 64) c.GitHub.WslDistro = "";
         if (string.IsNullOrWhiteSpace(c.Updates.Repo)) c.Updates.Repo = "ersinkoc/phonebox";
         c.Lan.Port = Math.Clamp(c.Lan.Port, 1024, 65535);
         if (string.IsNullOrWhiteSpace(c.Lan.Token)) c.Lan.Token = NewToken();

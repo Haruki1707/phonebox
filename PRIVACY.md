@@ -81,7 +81,7 @@ identifies your GitHub account to GitHub.
 | Feature | Where | What is sent |
 |---|---|---|
 | Discord widget | `discord.com/api/oauth2/token`, once at login and when the token needs renewing; `cdn.discordapp.com`, once per server icon and avatar shown (the agent fetches them, the phone never contacts Discord; the rest goes through the Discord app on this PC, locally). Turn off in **Settings › General › Discord** | The application's client ID and secret, and the one-time login code or the saved refresh token; for images only the image's id and hash, which Discord already knows |
-| GitHub widget | `api.github.com`, through your own GitHub CLI (`gh`) | Whatever `gh` sends with its own sign-in |
+| GitHub widget | `api.github.com`, through your own GitHub CLI (`gh`) — on Windows, or inside a running WSL distro when Settings › General › GitHub allows it | Whatever `gh` sends with its own sign-in |
 | Hacker News widget (phone) | `hacker-news.firebaseio.com` | Nothing but the request |
 | Exchange rates widget (phone) | `api.frankfurter.dev` | The currencies you chose |
 | Crypto widget (phone) | `api.coingecko.com` | The coins and currency you chose |
