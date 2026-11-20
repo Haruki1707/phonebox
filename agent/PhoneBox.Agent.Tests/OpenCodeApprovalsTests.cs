@@ -34,6 +34,8 @@ public sealed class OpenCodeApprovalsTests : IDisposable
         public readonly List<string> ReplyUrls = [];
         public readonly List<string> FormReplies = [];
         public readonly List<string> Calls = [];
+        /// <summary>The queue reads fail (a 503, as a slow or restarting service answers) while this is set.</summary>
+        public volatile bool QueuesFail;
 
         /// <param name="directory">The project directory the session list reports; a real path so the project name
         /// works out the same on Windows and Unix (Path.GetFileName).</param>
@@ -58,6 +60,8 @@ public sealed class OpenCodeApprovalsTests : IDisposable
                 lock (_lock) FormReplies.Add(body);
                 return new HttpResponseMessage(HttpStatusCode.NoContent);
             }
+            if (QueuesFail && (url.Contains("/api/form") || url.Contains("/api/permission/request")))
+                return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
             var data = url.Contains("/api/session")
                 ? SessionsJson
                 : url.Contains("/api/form") ? FormsJson
@@ -191,6 +195,27 @@ public sealed class OpenCodeApprovalsTests : IDisposable
         fake.QueueJson = """{"data":[]}"""; // the desktop answered while the phone was thinking
         await monitor.PollOnceAsync(CancellationToken.None);
         await WaitUntil(() => store.Snapshot().Count == 0, "the withdrawn prompt stayed on the phone");
+        Assert.Empty(fake.Replies);
+    }
+
+    [Fact]
+    public async Task AQueueThatCannotBeReadKeepsItsCards()
+    {
+        var fake = new FakeOpenCode(ProjDir) { QueueJson = QueueOne };
+        var store = new ApprovalStore(_events, NullLogger<ApprovalStore>.Instance, _clock);
+        var monitor = Monitor(store, fake);
+        await monitor.PollOnceAsync(CancellationToken.None);
+        var card = Assert.Single(store.Snapshot());
+
+        fake.QueuesFail = true; // OpenCode is slow or restarting for a round: that is not "answered on the desktop"
+        await monitor.PollOnceAsync(CancellationToken.None);
+        await Task.Delay(100);
+        Assert.Equal(card.Id, Assert.Single(store.Snapshot()).Id);
+
+        fake.QueuesFail = false;
+        fake.QueueJson = """{"data":[]}"""; // read again, and now really gone
+        await monitor.PollOnceAsync(CancellationToken.None);
+        await WaitUntil(() => store.Snapshot().Count == 0, "the answered prompt stayed on the phone");
         Assert.Empty(fake.Replies);
     }
 
@@ -336,6 +361,8 @@ public sealed class OpenCodeApprovalsTests : IDisposable
 
         fake.QueueJson = """{"data":[{"id":"per_new","sessionID":"ses_1","action":"edit","resources":["main.rs"]}]}""";
         await monitor.PollOnceAsync(CancellationToken.None);
+        // per_9 left the queue, so its card is withdrawn; that cleanup runs on the offer's own task
+        await WaitUntil(() => store.Snapshot().Count == 1, "the withdrawn per_9 stayed on the phone");
         var fresh = Assert.Single(store.Snapshot());
         Assert.Equal("per_new", fresh.Id); // a new request takes a slot
         Assert.All(store.Snapshot(), a => Assert.True(a.ExpiresAt > _clock.Now));
@@ -457,6 +484,8 @@ public sealed class OpenCodeApprovalsTests : IDisposable
         await monitor2.PollOnceAsync(CancellationToken.None);
         var b = Assert.Single(store2.Snapshot());
         Assert.True(b.Custom);
+        Assert.False(store2.Decide(b.Id, "answer", "   ")); // blank once trimmed: no answer at all
+        Assert.Single(store2.Snapshot());
         Assert.True(store2.Decide(b.Id, "answer", "route C, please"));
         await WaitUntil(() => fake.FormReplies.Count == 2, "the custom answer never reached the form");
         Assert.Equal("""{"answer":{"q0":"route C, please"}}""", fake.FormReplies[1]);
@@ -609,6 +638,13 @@ public sealed class OpenCodeApprovalsTests : IDisposable
         var mine = Assert.Single(services); // the other user's service is never read
         Assert.Equal("http://127.0.0.1:49374", mine.Info.Url);
         Assert.Contains("haruki", mine.Path);
+
+        // a wsl.conf user without a passwd line falls back to /home/<name>, still distro-absolute
+        var root3 = Path.Combine(_dir, "wsl.localhost", "Alpine");
+        Directory.CreateDirectory(Path.Combine(root3, "etc"));
+        File.WriteAllText(Path.Combine(root3, "etc", "wsl.conf"), "[user]\ndefault=alice\n");
+        Directory.CreateDirectory(Path.Combine(root3, "home", "alice"));
+        Assert.Equal("/home/alice", OpenCodeServices.DefaultUserHome(root3, "Alpine"));
 
         // without a resolvable default user the distro is skipped entirely
         var root2 = Path.Combine(_dir, "wsl.localhost", "Debian");

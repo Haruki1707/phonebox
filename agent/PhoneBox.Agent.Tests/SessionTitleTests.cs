@@ -195,6 +195,7 @@ public sealed class SessionTitleTests : IDisposable
 
         // the other way round: OpenCode shared, Claude not
         File.WriteAllText(path, """{"opencode":{"shareSessionTitles":true}}""");
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddMinutes(1)); // two quick writes can share a time stamp
         var (first2, second2) = (Assert.Single(monitor.Snapshot(), s => s.Tool == "claude"), Assert.Single(monitor.Snapshot(), s => s.Tool == "opencode"));
         Assert.Null(first2.Title);
         Assert.Equal(Title, second2.Title);
@@ -202,6 +203,7 @@ public sealed class SessionTitleTests : IDisposable
         // OpenCode unshared again (the row still carries the stale title in Name until the refresh): the title is
         // stripped from both Title and Name; Claude's switch is untouched by this config (off by default here)
         File.WriteAllText(path, """{"opencode":{"shareSessionTitles":false}}""");
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddMinutes(2));
         var (first3, second3) = (Assert.Single(monitor.Snapshot(), s => s.Tool == "claude"), Assert.Single(monitor.Snapshot(), s => s.Tool == "opencode"));
         Assert.Null(first3.Title);
         Assert.Null(second3.Title);

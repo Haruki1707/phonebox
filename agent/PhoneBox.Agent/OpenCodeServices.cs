@@ -87,8 +87,8 @@ internal static class OpenCodeServices
             }
             if (name is not null)
             {
-                var guess = Path.Combine(root, "home", name);
-                if (Directory.Exists(guess)) return guess;
+                // distro-absolute like the passwd answer: the caller puts it under the share root
+                if (Directory.Exists(Path.Combine(root, "home", name))) return "/home/" + name;
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }

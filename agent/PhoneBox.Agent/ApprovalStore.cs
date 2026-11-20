@@ -100,8 +100,8 @@ public sealed class ApprovalStore(PushStore events, ILogger<ApprovalStore> log)
             else if (decision == "answer" && raw.Length > 0
                 && a.Options is { Length: > 0 } opts && Array.Find(opts, o => o.Value == raw) is { } hit)
                 result = hit.Value;
-            else if (decision == "answer" && raw.Length > 0 && a.Custom)
-                result = Typed(raw); // a typed answer — also one that is not among the card's choices
+            else if (decision == "answer" && a.Custom && Typed(raw) is { Length: > 0 } typed)
+                result = typed; // a typed answer — also one that is not among the card's choices; blank is no answer
             else result = null;
         }
         else

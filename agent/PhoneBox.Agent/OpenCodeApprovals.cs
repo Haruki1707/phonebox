@@ -139,6 +139,9 @@ public sealed class OpenCodeApprovals : BackgroundService
         var liveForms = new HashSet<string>();
         var queues = new Dictionary<string, (ServiceState State, OpenCodePermission Request)>();
         var formQueues = new Dictionary<string, (ServiceState State, OpenCodeForm Form)>();
+        // services with a queue that could not be read this round (a timeout, an error status, a bad body): their
+        // cards are neither withdrawn nor re-offered, since an unread queue is not an empty one
+        var unread = new List<string>();
         foreach (var state in services)
         {
             var key = state.Path + "|";
@@ -147,18 +150,19 @@ public sealed class OpenCodeApprovals : BackgroundService
             // (directories x timeout)
             var batches = await Task.WhenAll(directories.Select(async directory =>
                 (Requests: await RequestsAsync(state, directory, ct), Forms: await FormsAsync(state, directory, ct))));
+            if (batches.Any(b => b.Requests is null || b.Forms is null)) unread.Add(key);
             foreach (var batch in batches)
             {
                 // the same id can come back from the server's own scope and a project scope (the queue is read per
                 // directory); the one polled under a project directory is the one its card is named after
-                foreach (var req in batch.Requests)
+                foreach (var req in batch.Requests ?? [])
                 {
                     var id = key + req.Id;
                     live.Add(id);
                     if (!queues.TryGetValue(id, out var known) || (known.Request.Directory is null && req.Directory is not null))
                         queues[id] = (state, req);
                 }
-                foreach (var form in batch.Forms)
+                foreach (var form in batch.Forms ?? [])
                 {
                     var id = key + form.Id;
                     liveForms.Add(id);
@@ -169,10 +173,11 @@ public sealed class OpenCodeApprovals : BackgroundService
         }
 
         // a request no longer in any queue was answered on the desktop (or the session ended): stop offering it
-        foreach (var id in _offered.Keys.Where(id => !live.Contains(id)).ToList()) Withdraw(id);
-        foreach (var id in _formOffers.Keys.Where(id => !liveForms.Contains(id)).ToList()) WithdrawForm(id);
-        foreach (var key in _dismissed.Keys) if (!liveForms.Contains(key)) _dismissed.TryRemove(key, out _);
-        foreach (var id in _expired.Where(id => !live.Contains(id) && !liveForms.Contains(id)).ToList()) _expired.Remove(id);
+        bool Unread(string id) => unread.Exists(id.StartsWith);
+        foreach (var id in _offered.Keys.Where(id => !live.Contains(id) && !Unread(id)).ToList()) Withdraw(id);
+        foreach (var id in _formOffers.Keys.Where(id => !liveForms.Contains(id) && !Unread(id)).ToList()) WithdrawForm(id);
+        foreach (var key in _dismissed.Keys) if (!liveForms.Contains(key) && !Unread(key)) _dismissed.TryRemove(key, out _);
+        foreach (var id in _expired.Where(id => !live.Contains(id) && !liveForms.Contains(id) && !Unread(id)).ToList()) _expired.Remove(id);
 
         if (onlyWhenAway && Idle.Seconds() < 60) return; // the desktop prompt is right there; the phone is for away
 
@@ -500,16 +505,18 @@ public sealed class OpenCodeApprovals : BackgroundService
         return state.Directories;
     }
 
-    private async Task<List<OpenCodePermission>> RequestsAsync(ServiceState state, string? directory, CancellationToken ct)
+    private async Task<List<OpenCodePermission>?> RequestsAsync(ServiceState state, string? directory, CancellationToken ct)
     {
         var query = directory is null ? "" : "?location%5Bdirectory%5D=" + Uri.EscapeDataString(directory);
         try
         {
             using var res = await GetAsync(state, "/api/permission/request" + query, ct);
-            if (res is null || !res.IsSuccessStatusCode) return [];
+            if (res is null) return null;
+            if (res.StatusCode == HttpStatusCode.NotFound) return []; // a service without this queue has nothing in it
+            if (!res.IsSuccessStatusCode) return null;                // a failed read is not an empty queue
             using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct));
             if (doc.RootElement.ValueKind != JsonValueKind.Object
-                || !doc.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array) return [];
+                || !doc.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array) return null;
             var list = new List<OpenCodePermission>();
             foreach (var e in data.EnumerateArray())
             {
@@ -530,9 +537,9 @@ public sealed class OpenCodeApprovals : BackgroundService
             }
             return list;
         }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return []; }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return null; }
         catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidOperationException or JsonException)
-        { _log.LogDebug("opencode approvals: queue ({Dir}): {Msg}", directory ?? "(default)", ex.Message); return []; }
+        { _log.LogDebug("opencode approvals: queue ({Dir}): {Msg}", directory ?? "(default)", ex.Message); return null; }
     }
 
     private async Task<HttpResponseMessage?> GetAsync(ServiceState state, string pathAndQuery, CancellationToken ct)
@@ -551,16 +558,18 @@ public sealed class OpenCodeApprovals : BackgroundService
     }
 
     /// <summary>The pending agent questions, from the same location-scoped channel the desktop app reads.</summary>
-    private async Task<List<OpenCodeForm>> FormsAsync(ServiceState state, string? directory, CancellationToken ct)
+    private async Task<List<OpenCodeForm>?> FormsAsync(ServiceState state, string? directory, CancellationToken ct)
     {
         var query = directory is null ? "" : "?location%5Bdirectory%5D=" + Uri.EscapeDataString(directory);
         try
         {
             using var res = await GetAsync(state, "/api/form" + query, ct);
-            if (res is null || !res.IsSuccessStatusCode) return [];
+            if (res is null) return null;
+            if (res.StatusCode == HttpStatusCode.NotFound) return []; // a service without this queue has nothing in it
+            if (!res.IsSuccessStatusCode) return null;                // a failed read is not an empty queue
             using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct));
             if (doc.RootElement.ValueKind != JsonValueKind.Object
-                || !doc.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array) return [];
+                || !doc.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array) return null;
             var list = new List<OpenCodeForm>();
             foreach (var e in data.EnumerateArray())
             {
@@ -587,9 +596,9 @@ public sealed class OpenCodeApprovals : BackgroundService
             }
             return list;
         }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return []; }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return null; }
         catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidOperationException or JsonException)
-        { _log.LogDebug("opencode approvals: forms ({Dir}): {Msg}", directory ?? "(default)", ex.Message); return []; }
+        { _log.LogDebug("opencode approvals: forms ({Dir}): {Msg}", directory ?? "(default)", ex.Message); return null; }
     }
 
     private static AuthenticationHeaderValue Auth(ServiceInfo service) => new("Basic",

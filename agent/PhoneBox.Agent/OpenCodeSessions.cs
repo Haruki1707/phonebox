@@ -89,9 +89,11 @@ internal static class OpenCodeSessions
     {
         lock (ServicesLock)
         {
-            if (Environment.TickCount64 >= _nextServiceScan)
+            // turning WSL watching on or off takes effect at once: the cache never outlives the switch it was built under
+            if (Environment.TickCount64 >= _nextServiceScan || wslEnabled != _cachedWithWsl)
             {
                 _nextServiceScan = Environment.TickCount64 + ServiceScanMs;
+                _cachedWithWsl = wslEnabled;
                 var list = new List<OpenCodeApprovals.ServiceInfo>();
                 foreach (var path in OpenCodeServices.Discover(wslEnabled: false))
                     if (OpenCodeApprovals.ReadService(path) is { } service) list.Add(service);
@@ -106,6 +108,7 @@ internal static class OpenCodeSessions
     private static readonly object ServicesLock = new();
     private static long _nextServiceScan = -ServiceScanMs; // the first scan goes out at once
     private static List<OpenCodeApprovals.ServiceInfo> _cachedServices = [];
+    private static bool _cachedWithWsl;
 
     internal static async Task<List<AgentSession>> ReadServiceAsync(HttpClient http,
         OpenCodeApprovals.ServiceInfo service, long cutoff, CancellationToken ct, long? nowMs = null, bool titles = false)

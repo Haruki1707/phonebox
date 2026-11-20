@@ -20,9 +20,8 @@ test('the page shows the saved OpenCode answers, and turning them off survives a
   const toggle = page.locator('[data-bind="opencode.phoneApprovals"]');
   await expect(toggle).toBeChecked(); // what the settings file says is what the page shows
   const switchRow = page.locator('label.switch', { has: toggle });
-  const turnOff = () => (toggle.isChecked() ? switchRow.click() : null); // the input itself is hidden behind the switch
-
-  turnOff();
+  await switchRow.click(); // the input itself is hidden behind the switch
+  await expect(toggle).not.toBeChecked();
   await page.evaluate(() => {
     const original = window.fetch;
     window.__savedBodies = [];
