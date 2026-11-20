@@ -180,9 +180,10 @@ OpenCode prompts arrive on their own, no setup: when OpenCode's background servi
 which the desktop app and the CLI keep running) asks for permission — run a command, edit a file, fetch a page —
 PhoneBox reads it from `~/.local/state/opencode/service.json`'s local API and shows the same card, with **Allow**,
 **Always allow** and **Deny**. Allow answers once, Always allow also saves OpenCode's proposed pattern for the
-project (its own "saved approval"), Deny rejects. If nobody answers within the Claude Code timeout above, or the
-prompt is answered in OpenCode first, the card simply goes away and OpenCode's window keeps the question. Set
-`"phoneApprovals": false` in the `opencode` section of `config.json` to leave every prompt to OpenCode.
+project (its own "saved approval"), Deny rejects. If nobody answers within 90 seconds (`"timeoutSec"` in the
+`opencode` section of `config.json`), or the prompt is answered in OpenCode first, the card simply goes away and
+OpenCode's window keeps the question. Set `"phoneApprovals": false` in the same section to leave every prompt to
+OpenCode.
 
 OpenCode inside WSL works the same way: each running distro's own service is discovered and watched, and its
 prompts, questions and sessions reach the phone like the native ones. Sessions show OpenCode's own session title
