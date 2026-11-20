@@ -45,14 +45,19 @@ Last updated: 2026-11-15 (PhoneBox 0.9.6).
   password OpenCode wrote to `~/.local/state/opencode/service.json`; that password never leaves the computer. Only
   session metadata is requested (the folder, title, model, token counters, start and update times and the outcome);
   prompts, replies and tool arguments are never fetched, and sessions older than three hours are ignored. A stopped
-  WSL distro is never started for this. The data goes only to your phone over the same local USB / paired Wi-Fi link
-  as other panel data.
-- **OpenCode permission prompts:** when OpenCode's background service asks for permission, the agent reads the pending
-  request from its local API (`127.0.0.1`, with the password OpenCode wrote to
-  `~/.local/state/opencode/service.json`; that password is never sent anywhere). What goes to the phone is the card's
-  content only: the project, the action (run a command, edit a file…), the command or paths it names and any message
-  OpenCode attached. The phone's answer (allow once, allow always, deny) is posted back to the same local API. Turn
-  `"phoneApprovals"` off in the `opencode` section of `config.json` to stop this entirely.
+  WSL distro is never started for this. Titles reach the phone only while Settings › General › "Show OpenCode session
+  titles" is on; otherwise the widget shows the project folder. The data goes only to your phone over the same local
+  USB / paired Wi-Fi link as other panel data.
+- **OpenCode permission prompts and questions (off by default):** when OpenCode's background service asks for
+  permission, the agent reads the pending request from its local API (`127.0.0.1`, with the password OpenCode wrote
+  to `~/.local/state/opencode/service.json`; that password is never sent anywhere). What goes to the phone is the
+  card's content only: the project, the action (run a command, edit a file…), the command or paths it names, any
+  message OpenCode attached, and the pattern an Allow always would save for the project. The phone's answer (allow
+  once, allow always, deny) is posted back to the same local API. The same card carries OpenCode's agent questions:
+  the question, its choices and whether a typed answer is allowed go to the phone, and the pick or typed answer
+  comes back — nothing else about the conversation is read. Nothing is offered or sent until Settings › General ›
+  OpenCode prompts is turned on (or `"phoneApprovals": true` in the `opencode` section of `config.json`); turning it
+  off again stops this entirely.
 - **Claude Code chat titles** (off by default): with Settings › Claude Code › "Show Claude Code chat titles on the
   phone" on, the sessions widget shows each chat's title, the name you gave it or the one Claude Code wrote, which it
   often draws from your first prompt. The agent reads only the title records at the end of the chat's file in

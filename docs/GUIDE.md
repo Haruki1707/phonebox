@@ -176,20 +176,24 @@ card takes the project name from the workspace name WorkBuddy stores
 
 ## OpenCode permission prompts
 
-OpenCode prompts arrive on their own, no setup: when OpenCode's background service (`opencode serve --service`,
-which the desktop app and the CLI keep running) asks for permission — run a command, edit a file, fetch a page —
-PhoneBox reads it from `~/.local/state/opencode/service.json`'s local API and shows the same card, with **Allow**,
-**Always allow** and **Deny**. Allow answers once, Always allow also saves OpenCode's proposed pattern for the
-project (its own "saved approval"), Deny rejects. If nobody answers within 90 seconds (`"timeoutSec"` in the
+OpenCode prompts are off until you turn them on: press the **Ask on the phone** switch under **Settings › General ›
+OpenCode prompts** (or set `"phoneApprovals": true` in the `opencode` section of `config.json`). While it is on, when
+OpenCode's background service (`opencode serve --service`, which the desktop app and the CLI keep running) asks for
+permission — run a command, edit a file, fetch a page — PhoneBox reads it from `~/.local/state/opencode/service.json`'s
+local API and shows the same card, with **Allow**, **Always allow** and **Deny**. Allow answers once, Always allow
+also saves OpenCode's proposed pattern for the project (its own "saved approval") — the card shows which pattern that
+would be before the countdown ends — and Deny rejects. If nobody answers within 90 seconds (`"timeoutSec"` in the
 `opencode` section of `config.json`), or the prompt is answered in OpenCode first, the card simply goes away and
-OpenCode's window keeps the question. Set `"phoneApprovals": false` in the same section to leave every prompt to
-OpenCode.
+OpenCode's window keeps the question. Turning the switch off again leaves every prompt to OpenCode.
 
-OpenCode inside WSL works the same way: each running distro's own service is discovered and watched, and its
-prompts, questions and sessions reach the phone like the native ones. Sessions show OpenCode's own session title
-with the project folder underneath, like Claude Code's titled chats. The native and WSL services are polled side
-by side and each answer goes back to the service that asked. **Also watch OpenCode in WSL** under Settings ›
-General › OpenCode prompts turns this off (it is on by default); a stopped distro is never started for a check.
+OpenCode inside WSL works the same way, but only for distros that are already running, and only with **Also watch
+OpenCode in WSL** on (Settings › General › OpenCode prompts; off by default). Running distros are found with
+`wsl.exe --list --running` and remembered for a minute; a stopped distro is never started for a check. Its prompts,
+questions and sessions reach the phone like the native ones, and each answer goes back to the service that asked.
+
+Sessions show OpenCode's own session title with the project folder underneath once **Show OpenCode session titles**
+is on (off by default: OpenCode draws the titles from the conversation, so they stay off the phone until you share
+them, like Claude Code's).
 
 OpenCode's agent questions work the same way: when the agent asks "route A, B or C, or type your own", the phone
 shows the choices as buttons (and a text field when a custom answer is allowed) and sends the pick back. Questions
@@ -288,9 +292,11 @@ switchable ports). The panel keeps running over Wi-Fi while the USB power is off
   switched off in the processes widget's options.
 - **Claude Code permission prompts** are opt-in. The hook only posts the request to the agent on `127.0.0.1`; the
   phone can only answer allow or deny for that one request.
-- **OpenCode permission prompts** are read from OpenCode's background service on `127.0.0.1`, with the password
-  OpenCode itself wrote to `~/.local/state/opencode/service.json`; that password never leaves this computer. The
-  phone answers one prompt at a time (allow, always allow or deny); nothing else about the session is sent.
+- **OpenCode permission prompts** (opt-in, off by default) are read from OpenCode's background service on `127.0.0.1`,
+  with the password OpenCode itself wrote to `~/.local/state/opencode/service.json`; that password never leaves this
+  computer and the service address is accepted only on this machine's loopback interface. The phone answers one
+  prompt at a time (allow, always allow or deny) and sees the command, any message and the pattern an always allow
+  would save; nothing else about the session is sent.
 - **Claude quota:** read with the OAuth token Claude Code stores in `~/.claude/.credentials.json`, sent only to
   `api.anthropic.com/api/oauth/usage` (the endpoint behind Claude Code's `/usage`). The token is read-only: PhoneBox
   never refreshes it, so it can't interfere with Claude Code. This endpoint is undocumented and may change.

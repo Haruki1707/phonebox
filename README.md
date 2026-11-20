@@ -54,7 +54,8 @@ their own layouts, or switch one phone between paired computers.
 | **Automation** | Webhook values and notifications, Home Assistant controls and rules that react to activity on the computer |
 
 Tap an AI session for its model, timing and token details. Answer Claude Code and OpenCode permission prompts
-(**Allow**, **Deny**, and **Always allow** for OpenCode) from the phone. Optional
+(**Allow**, **Deny**, and **Always allow** for OpenCode) from the phone — each off until you turn it on under
+Settings › General. Optional
 [CodexBar integration](docs/GUIDE.md#widgets) adds quota providers and a cost overview.
 
 <p align="center"><a href="docs/tour-0.6.mp4"><img src="docs/tour-0.6.gif" width="780" alt="PhoneBox tour showing notifications, a Claude Code permission prompt and automatic page switching"></a><br>
