@@ -41,7 +41,7 @@ public sealed class SessionMonitor(ILogger<SessionMonitor> log, ConfigStore? con
     /// The sessions, for everything that sends them anywhere (the live stream, /api/work, the rules). This is the one
     /// place they leave this class, so the title setting is applied here: Claude Code's chats carry a title only while
     /// Settings › Claude Code › "Show session titles on the phone" is on, while OpenCode's sessions always carry
-    /// theirs (the widget showed the same text as the session's slug before).
+    /// theirs.
     /// </summary>
     public IReadOnlyList<AgentSession> Snapshot()
     {
