@@ -2,7 +2,7 @@
 
 [Back to PhoneBox](../README.md) · [Installation and connections](SETUP.md) · [Development](DEVELOPMENT.md)
 
-[Appearance](#appearance) · [Control Deck](#control-deck) · [Pages & templates](#pages--templates) · [Widgets](#widgets) · [Layout editor & settings](#layout-editor--settings) · [Claude Code permission prompts](#claude-code-permission-prompts) · [Webhooks](#webhooks) · [Rules](#rules) · [Security & privacy](#security--privacy)
+[Appearance](#appearance) · [Control Deck](#control-deck) · [Pages & templates](#pages--templates) · [Widgets](#widgets) · [Layout editor & settings](#layout-editor--settings) · [Claude Code permission prompts](#claude-code-permission-prompts) · [OpenCode permission prompts](#opencode-permission-prompts) · [Webhooks](#webhooks) · [Rules](#rules) · [Security & privacy](#security--privacy)
 
 ## Appearance
 
@@ -41,7 +41,7 @@ Every page is a 12 × 6 grid. Start a page from one of the 30 templates (or from
 |---|---|
 | **Home** — clock, weather, now playing, CPU / GPU / RAM / network tiles | **Dashboard** — gauges, clock, media and a few shortcut keys |
 | <img src="screenshots/home.png" alt="Home"> | <img src="screenshots/dashboard.png" alt="Dashboard"> |
-| **AI quotas** — Claude and Codex limits, reset times, "at this pace: full in 1 d 5 h" | **Sessions** — Claude Code / Codex / Cursor sessions and GitHub |
+| **AI quotas** — Claude and Codex limits, reset times, "at this pace: full in 1 d 5 h" | **Sessions** — Claude Code / Codex / Cursor / OpenCode sessions and GitHub |
 | <img src="screenshots/ai.png" alt="AI quotas"> | <img src="screenshots/work.png" alt="Sessions"> |
 | **System** — CPU, GPU, memory, disks, network and ping charts | **Processes** — heaviest apps; tap one to end an instance or all of them |
 | <img src="screenshots/system.png" alt="System"> | <img src="screenshots/procs-sheet.png" alt="Processes"> |
@@ -76,7 +76,7 @@ keeps the screen on.
 | **Time** | Clock (with status line and weather) · Analog clock (any time zone) · **Word clock** · World clocks · Calendar · **Next up** · Time progress (day / week / month / year) · Countdown · Pomodoro · Quick timer · Stopwatch |
 | **Weather & sky** | Weather · Forecast (hourly / 7 days) · Sun & moon (daylight left, UV, moon phase) · **Moon** · Air quality (European AQI, PM2.5, PM10, O₃, NO₂) |
 | **Computer** | **Rules** (which hold, pause) · **Battery care** · On air (microphone / camera / OBS) · OBS Studio (live, recording, scenes) · **Dictation** (speak on the phone, typed on the PC; the app asks for the microphone on first use) · **App console** (Windows: keys and a dial for the app in front, set per app in Settings › General; use the focused app's process name from Task Manager's Details tab; packaged Store apps can all show up as `ApplicationFrameHost` and terminal tabs as `WindowsTerminal`, so a profile for those names covers all of them) · Device batteries (headphones, mice, keyboards) · Docker / Podman (containers, start / stop) · Metric tile · Gauge · Chart · GPU details · Memory & disks · Top processes · Processes · Now playing · Radio · Volume · **Spectrum bars** (Windows: a live spectrum of what the PC is playing, like the classic LED bar visualizers) · Shortcut grid · Big button (optionally filled with the shortcut's uploaded picture) · **Command** (PowerShell / bash / zsh output, refreshed every N seconds) · **Trackpad** (control PC cursor, tap to click, hold to drag, scroll) |
-| **AI & code** | AI quotas · Quota ring · AI sessions (Claude Code, Codex, Cursor) · GitHub |
+| **AI & code** | AI quotas · Quota ring · AI sessions (Claude Code, Codex, Cursor, OpenCode) · GitHub |
 | **Personal** | **Agenda** (Google / Outlook / iCloud calendars) · Note (edit it from the phone) · Checklist (resets daily) · Counter · Breathe · Quote · Title · Phone battery · **Computers** (switch between paired computers) · **Photo frame** (a slideshow from a photo folder on the PC) |
 | **Web & data** | **Custom HTML** (your own widget, sandboxed) · **Home Assistant** (entities with their own name and icon, tap to switch) · **Pushed value** · **Notifications** (both fed by [webhooks](#webhooks)) · **News feeds** (your RSS and Atom feeds; with its "Open articles on the PC" option, a tap opens the article on the PC) · Hacker News · Exchange rates (ECB) · Crypto prices · Image / webcam · **Camera** (a live picture from an IP camera over RTSP, pulled by ffmpeg on the PC) |
 
@@ -104,7 +104,7 @@ on a page rather than inside a stack.
 **CodexBar** is an optional source: install its `codexbar` CLI on the computer and the agent reads `usage --json`.
 The CodexBar template and quota widget can show every provider reported by the CLI, with configurable provider rotation.
 An optional cost overview shows the last 30 days of spend and tokens; it is off by default.
-Local Claude, Codex and Antigravity sources keep refreshing when CodexBar is absent, fails, or reports stale data. General settings
+Local Claude, Codex, Antigravity and OpenRouter sources keep refreshing when CodexBar is absent, fails, or reports stale data. General settings
 provide defaults; a widget's own options override them, including an empty provider selection.
 Install a compatible CLI from [CodexBar](https://github.com/steipete/CodexBar) if available for your system.
 PhoneBox uses native local sources when no compatible CLI is installed.
@@ -172,6 +172,26 @@ WorkBuddy speaks the same hook protocol. Add the same `PermissionRequest` entry 
 hand: *Install hook* writes to `~/.claude/settings.json` only. WorkBuddy keeps its sessions in `~/.workbuddy`, so the
 card takes the project name from the workspace name WorkBuddy stores
 (`~/.workbuddy/workspace-display-names.json`) instead of the folder name.
+
+## OpenCode permission prompts
+
+OpenCode prompts arrive on their own, no setup: when OpenCode's background service (`opencode serve --service`,
+which the desktop app and the CLI keep running) asks for permission — run a command, edit a file, fetch a page —
+PhoneBox reads it from `~/.local/state/opencode/service.json`'s local API and shows the same card, with **Allow**,
+**Always allow** and **Deny**. Allow answers once, Always allow also saves OpenCode's proposed pattern for the
+project (its own "saved approval"), Deny rejects. If nobody answers within the Claude Code timeout above, or the
+prompt is answered in OpenCode first, the card simply goes away and OpenCode's window keeps the question. Set
+`"phoneApprovals": false` in the `opencode` section of `config.json` to leave every prompt to OpenCode.
+
+OpenCode inside WSL works the same way: each running distro's own service is discovered and watched, and its
+prompts, questions and sessions reach the phone like the native ones. The native and WSL services are polled side
+by side and each answer goes back to the service that asked. **Also watch OpenCode in WSL** under Settings ›
+General › OpenCode prompts turns this off (it is on by default); a stopped distro is never started for a check.
+
+OpenCode's agent questions work the same way: when the agent asks "route A, B or C, or type your own", the phone
+shows the choices as buttons (and a text field when a custom answer is allowed) and sends the pick back. Questions
+without tappable answers, and Claude Code's own questions, are shown for information only — they are answered at
+the PC.
 
 ## Webhooks
 
@@ -265,6 +285,9 @@ switchable ports). The panel keeps running over Wi-Fi while the USB power is off
   switched off in the processes widget's options.
 - **Claude Code permission prompts** are opt-in. The hook only posts the request to the agent on `127.0.0.1`; the
   phone can only answer allow or deny for that one request.
+- **OpenCode permission prompts** are read from OpenCode's background service on `127.0.0.1`, with the password
+  OpenCode itself wrote to `~/.local/state/opencode/service.json`; that password never leaves this computer. The
+  phone answers one prompt at a time (allow, always allow or deny); nothing else about the session is sent.
 - **Claude quota:** read with the OAuth token Claude Code stores in `~/.claude/.credentials.json`, sent only to
   `api.anthropic.com/api/oauth/usage` (the endpoint behind Claude Code's `/usage`). The token is read-only: PhoneBox
   never refreshes it, so it can't interfere with Claude Code. This endpoint is undocumented and may change.
@@ -272,9 +295,12 @@ switchable ports). The panel keeps running over Wi-Fi while the USB power is off
   longer after errors and as long as a `429` asks for, across restarts too. An expired or refused token is not sent:
   PhoneBox waits until Claude Code renews it.
 - **Codex quota and sessions** are read from local files in `~/.codex/sessions`; Claude Code sessions from
-  `~/.claude/sessions`. Cursor sessions (opt-in in **Settings › General › Cursor sessions**) come from recent agent
-  transcripts under `~/.cursor/projects/*/agent-transcripts`. Only the last message's role is kept; chat text is never
-  shown, stored or sent. Project names use the folder basename from Cursor's `workspaceStorage`.
+  `~/.claude/sessions`. OpenCode sessions are read from its SQLite database `~/.local/share/opencode/opencode.db`,
+  opened read-only: the session's folder, slug, model, token counters, times and outcome, never prompts, replies or
+  tool arguments (the database's account and credential tables are not touched). Cursor sessions (opt-in in
+  **Settings › General › Cursor sessions**) come from recent agent transcripts under
+  `~/.cursor/projects/*/agent-transcripts`. Only the last message's role is kept; chat text is never shown, stored or
+  sent. Project names use the folder basename from Cursor's `workspaceStorage`.
 - **Native Antigravity quota:** the agent reads the running Antigravity server's port and CSRF token from its
   process arguments and queries its loopback quota/status API, or invokes the signed-in CLI's structured usage
   command. Only measured quota fields reach the panel; CLI conversation identifiers and token counters are omitted.

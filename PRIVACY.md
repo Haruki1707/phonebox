@@ -40,6 +40,19 @@ Last updated: 2026-11-15 (PhoneBox 0.9.6).
   the panel; chat text is never shown, stored or sent. Project labels use the folder basename from Cursor's
   `workspaceStorage/*/workspace.json` `folder` URI (cached about a minute), sent to the phone as the session's project
   name over the same local USB / paired Wi-Fi link as other panel data. Turning the setting off stops the scan.
+- **OpenCode sessions:** the agent asks OpenCode's own background service — the native one, and the one inside each
+  running WSL distro — for its recent sessions: the same local HTTP API the desktop app uses, authenticated with the
+  password OpenCode wrote to `~/.local/state/opencode/service.json`; that password never leaves the computer. Only
+  session metadata is requested (the folder, title, model, token counters, start and update times and the outcome);
+  prompts, replies and tool arguments are never fetched, OpenCode's database is not opened, and sessions older than
+  three hours are ignored. A stopped WSL distro is never started for this. The data goes only to your phone over the
+  same local USB / paired Wi-Fi link as other panel data.
+- **OpenCode permission prompts:** when OpenCode's background service asks for permission, the agent reads the pending
+  request from its local API (`127.0.0.1`, with the password OpenCode wrote to
+  `~/.local/state/opencode/service.json`; that password is never sent anywhere). What goes to the phone is the card's
+  content only: the project, the action (run a command, edit a file…), the command or paths it names and any message
+  OpenCode attached. The phone's answer (allow once, allow always, deny) is posted back to the same local API. Turn
+  `"phoneApprovals"` off in the `opencode` section of `config.json` to stop this entirely.
 - **Claude Code chat titles** (off by default): with Settings › Claude Code › "Show Claude Code chat titles on the
   phone" on, the sessions widget shows each chat's title, the name you gave it or the one Claude Code wrote, which it
   often draws from your first prompt. The agent reads only the title records at the end of the chat's file in

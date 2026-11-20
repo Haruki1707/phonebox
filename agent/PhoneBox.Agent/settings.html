@@ -759,6 +759,14 @@ nav a.on::before { color: var(--accent); }
       </div>
 
       <div class="card">
+        <h3 data-i18n="s.opencode.title">OpenCode prompts</h3>
+        <p class="hint" style="margin:0 0 12px" data-i18n="s.opencode.hint">OpenCode permission prompts and agent questions reach the phone while its background service is running. Allow always saves the requested pattern for the project, so it arms only after a short countdown.</p>
+        <div class="row" style="margin-bottom:8px"><label class="switch"><input type="checkbox" data-bind="opencode.phoneApprovals"><span></span></label> <span data-i18n="s.opencode.askOnPhone">Ask on the phone</span></div>
+        <div class="row" style="margin-bottom:8px"><label class="switch"><input type="checkbox" data-bind="opencode.watchWsl"><span></span></label> <span data-i18n="s.opencode.watchWsl">Also watch OpenCode in WSL</span></div>
+        <div class="field" style="max-width:260px"><label data-i18n="s.opencode.countdown">Seconds before Allow always can be pressed (0 = at once)</label><input type="number" min="0" max="60" data-bind="opencode.alwaysCountdownSec" data-type="int"></div>
+      </div>
+
+      <div class="card">
         <h3 data-i18n="s.quotas.title">AI quotas &amp; CodexBar</h3>
         <p class="hint" style="margin:0 0 12px" data-i18n="s.quotas.lead">Choose which AI coding services to track and show on the panel, and configure rotation.</p>
         <div class="field"><label data-i18n="s.quotas.tracked">Tracked AI services</label>
@@ -3202,7 +3210,7 @@ async function loadInfo() {
 // The form reads every section it binds and renders, so a config without one — an older export, or a
 // hand-trimmed paste in Apply JSON — gets the same defaults a fresh load does before anything renders.
 function fillDefaults() {
-  cfg.pages = fitPages(cfg.pages); cfg.shortcuts ??= []; cfg.rules ??= []; cfg.display ??= {}; cfg.night = { enabled: true, start: '00:30', end: '07:30', brightness: 0.02, ...cfg.night }; cfg.weather ??= {}; cfg.weather.unit ??= 'celsius'; cfg.weather.model ??= ''; cfg.photos ??= { folder: '', subfolders: true }; cfg.lan ??= { enabled: false, port: 8766 }; cfg.updates ??= { auto: true, repo: 'ersinkoc/phonebox' }; cfg.claude ??= { phoneApprovals: true, timeoutSec: 90, onlyWhenAway: false, shareSessionTitles: false, shareConversation: false };
+  cfg.pages = fitPages(cfg.pages); cfg.shortcuts ??= []; cfg.rules ??= []; cfg.display ??= {}; cfg.night = { enabled: true, start: '00:30', end: '07:30', brightness: 0.02, ...cfg.night }; cfg.weather ??= {}; cfg.weather.unit ??= 'celsius'; cfg.weather.model ??= ''; cfg.photos ??= { folder: '', subfolders: true }; cfg.lan ??= { enabled: false, port: 8766 }; cfg.updates ??= { auto: true, repo: 'ersinkoc/phonebox' }; cfg.claude ??= { phoneApprovals: true, timeoutSec: 90, onlyWhenAway: false, shareSessionTitles: false, shareConversation: false }; cfg.opencode ??= { phoneApprovals: true, timeoutSec: 90, onlyWhenAway: false, alwaysCountdownSec: 10, watchWsl: true };
   cfg.codexBar ??= { providers: ['claude', 'codex', 'antigravity'], rotate: true, pageSize: 2, rotateInterval: 8 };
   for (const [k, v] of Object.entries({ language: 'auto', hour12: false, idleReturnSec: 90, switchCountdownSec: 3, touchGraceSec: 20, minDwellSec: 15, holdMaxMin: 30, keepAwake: true,
     showSeconds: true, vibrate: true, finishToast: true, volumeKeys: true, artTint: true, proximityWake: true, orientation: 'landscape', theme: 'default', accent: '#2dd4bf' })) cfg.display[k] ??= v;

@@ -21,6 +21,9 @@
   "discord": { "enabled": false, "clientId": null, "clientSecret": null },
   // Cursor agent chats on the AI sessions widget (off by default)
   "cursor": { "sessions": false },
+  // OpenCode permission prompts on the phone: Allow (once or always) and Deny, read from OpenCode's
+  // background service on 127.0.0.1. Set "phoneApprovals": false to leave every prompt to OpenCode's own window.
+  "opencode": { "phoneApprovals": true, "timeoutSec": 90, "alwaysCountdownSec": 10, "watchWsl": true },
   // App console widget (Windows): keys and dial bindings per app, matched by the focused window's process name
   "console": { "profiles": [] },
 

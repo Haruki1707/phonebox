@@ -5,9 +5,16 @@ namespace PhoneBox.Agent;
 
 /// <param name="Tool">The tool Claude Code wants to use (Bash, Edit, Write, WebFetch, an MCP tool…).</param>
 /// <param name="Detail">What it wants to do: the command, the file path, the URL…</param>
-/// <param name="Kind">"permission" (Allow / Deny) or "question" (Claude is asking something; it is answered in the terminal).</param>
+/// <param name="Kind">"permission" (Allow / Deny) or "question" (an agent question; OpenCode's can be answered on the phone).</param>
+/// <param name="Options">For a question: the answers to pick from, in order.</param>
+/// <param name="Custom">For a question: a typed answer is accepted too (OpenCode's "custom" field flag).</param>
+/// <param name="Always">Offer an Allow always button: true for OpenCode's permission prompts (OpenCode saves the pattern).</param>
 public sealed record Approval(string Id, string Source, string Session, string Project, string Tool, string Detail,
-    string? Description, long CreatedAt, long ExpiresAt, string Kind = "permission");
+    string? Description, long CreatedAt, long ExpiresAt, string Kind = "permission",
+    ApprovalOption[]? Options = null, bool Custom = false, bool Always = false);
+
+/// <summary>One answer an agent question can be answered with.</summary>
+public sealed record ApprovalOption(string Value, string Label, string? Description);
 
 /// <summary>
 /// Permission prompts waiting for an answer from the phone. A Claude Code hook posts the request and waits; the
@@ -61,12 +68,21 @@ public sealed class ApprovalStore(PushStore events, ILogger<ApprovalStore> log)
         }
     }
 
-    public bool Decide(string id, string decision)
+    public bool Decide(string id, string decision, string? value = null)
     {
-        if (decision is not ("allow" or "deny" or "skip") || !_pending.TryGetValue(id, out var p)) return false;
+        // "always" is OpenCode's Allow always (it saves the pattern for the project); ClaudeHook treats it as a plain
+        // allow. "answer" answers an agent question with a choice from the card (or a typed answer) — the value is
+        // what the question's reply carries, so it is passed through as the decision itself.
+        var result = decision switch
+        {
+            "allow" or "always" or "deny" or "skip" => decision,
+            "answer" when !string.IsNullOrWhiteSpace(value) => value.Trim()[..Math.Min(500, value.Trim().Length)],
+            _ => null,
+        };
+        if (result is null || !_pending.TryGetValue(id, out var p)) return false;
         if (p.Approval.ExpiresAt <= _clock.GetUtcNow().ToUnixTimeMilliseconds()) return false;
         // accepted only if it wins against the timeout and the cancel (see AskAsync), and only then logged as such
-        if (!p.Decision.TrySetResult(decision)) return false;
+        if (!p.Decision.TrySetResult(result)) return false;
         log.LogInformation("approval {Id}: {Decision} from the phone", id, decision);
         return true;
     }

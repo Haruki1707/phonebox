@@ -57,6 +57,7 @@ export const DEFAULT_CFG = {
   weather: { city: 'Tallinn', lat: 59.437, lon: 24.745, unit: 'celsius', model: '' },
   night: { enabled: true, start: '00:30', end: '07:30', brightness: 0.02 },
   display: { showSeconds: true, idleReturnSec: 90, vibrate: true, finishToast: true, volumeKeys: true },
+  opencode: { alwaysCountdownSec: 10 },
   pages: FALLBACK_PAGES,
   shortcuts: [],
 };
@@ -1117,7 +1118,7 @@ export async function loadApprovals() {
 export function renderApproval() {
   const a = approvals[0];
   const box = $('approval');
-  if (!a) { box.hidden = true; approvalShown = null; return; }
+  if (!a) { box.hidden = true; approvalShown = null; stopAlwaysCountdown(); return; }
   if (approvalShown !== a.id) {
     approvalShown = a.id;
     lastTouch = Date.now();
@@ -1125,13 +1126,34 @@ export function renderApproval() {
     if (nightOn) { wakeUntil = Date.now() + 60_000; setNight(false); }
     buzz('0,120,80,120,80,240');
     // A prompt whose answer is still in flight comes back locked: it can be shown again while its own post runs.
-    $('apAllow').disabled = $('apDeny').disabled = $('apSkip').disabled = submitting.has(a.id);
+    $('apAllow').disabled = $('apDeny').disabled = $('apAlways').disabled = $('apSkip').disabled = submitting.has(a.id);
+    renderChoices(a);
+    // Allow always saves a pattern for the whole project: give the thumb ten seconds (as configured) before it can
+    // be pressed by accident.
+    const countdown = Math.max(0, Math.min(60, cfg.opencode?.alwaysCountdownSec ?? 10));
+    if (countdown > 0 && a.kind !== 'question' && a.always) startAlwaysCountdown(countdown); else stopAlwaysCountdown();
   }
   // A question from Claude is answered at the PC (the terminal shows it); the phone only tells you it is waiting.
+  // OpenCode questions carry their answers, so the phone can send the pick — or a typed answer when allowed.
   const asking = a.kind === 'question';
+  const options = asking && Array.isArray(a.options) ? a.options : [];
   $('apAllow').hidden = $('apDeny').hidden = asking;
-  $('apSkip').hidden = !asking;
+  // "Got it" is for questions answered at the PC (Claude's, or OpenCode forms with nothing to tap); a card that
+  // carries its own answers answers them right here, so the extra button would only crowd the row.
+  $('apSkip').hidden = !asking || options.length > 0 || !!a.custom;
+  // "Always allow" comes with OpenCode prompts (OpenCode saves the pattern for the project); Claude Code has no such
+  // answer and keeps its two buttons. Three buttons are tighter: the countdown steps aside while the third shows.
+  $('apAlways').hidden = asking || !a.always;
+  box.classList.toggle('with-always', !asking && !!a.always);
+  box.classList.toggle('with-choices', options.length > 0 || (asking && !!a.custom));
+  $('apChoices').hidden = options.length === 0;
+  $('apCustom').hidden = !(asking && a.custom);
+  if (asking && a.custom) $('apCustomText').placeholder = t('panel.answerCustom');
   $('apSource').textContent = a.source || 'Claude Code';
+  // the card wears the tool's own glyph: OpenCode's diamond (as on the sessions widget), Claude's asterisk otherwise
+  const opencode = (a.source || '') === 'OpenCode';
+  $('apLogo').textContent = opencode ? '◈' : '✳';
+  $('apLogo').classList.toggle('opencode', opencode);
   $('apProject').textContent = a.project || a.session || '';
   $('apCount').textContent = approvals.length > 1 ? t('panel.oneOfN', { n: approvals.length }) : '';
   $('apTool').textContent = a.tool;
@@ -1140,6 +1162,52 @@ export function renderApproval() {
   $('apDetail').hidden = !a.detail;
   box.hidden = false;
   tickApproval();
+}
+
+// Agent questions (OpenCode forms): one button per answer. Built only when the card changes, so the five-second list
+// poll never rebuilds the buttons mid-tap or disturbs the typed answer.
+function renderChoices(a) {
+  const wrap = $('apChoices');
+  const options = a.kind === 'question' && Array.isArray(a.options) ? a.options : [];
+  wrap.replaceChildren(...options.map((o) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'ap-opt';
+    b.disabled = submitting.has(a.id);
+    const label = document.createElement('b');
+    label.textContent = o.label || o.value || '';
+    b.appendChild(label);
+    if (o.description) { const d = document.createElement('small'); d.textContent = o.description; b.appendChild(d); }
+    b.addEventListener('click', () => decide('answer', o.value, o.label || o.value));
+    return b;
+  }));
+}
+
+// Allow always arms after the configured seconds (Settings › General › OpenCode prompts); the seconds show on the
+// button itself. A stale countdown never unlocks a newer card (or one whose answer is on its way): every step
+// re-checks which card is current.
+let alwaysCountdown = null;
+
+function startAlwaysCountdown(seconds) {
+  stopAlwaysCountdown();
+  const b = $('apAlways');
+  const id = approvalShown;
+  let left = seconds;
+  b.disabled = true;
+  b.textContent = `${t('panel.allowAlways')} · ${left}`;
+  alwaysCountdown = setInterval(() => {
+    left -= 1;
+    if (left > 0 && approvalShown === id) { b.textContent = `${t('panel.allowAlways')} · ${left}`; return; }
+    stopAlwaysCountdown();
+    if (approvalShown === id && approvals[0] && approvals[0].id === id && !submitting.has(id)) {
+      b.disabled = false;
+      b.textContent = t('panel.allowAlways');
+    }
+  }, 1000);
+}
+
+function stopAlwaysCountdown() {
+  if (alwaysCountdown !== null) { clearInterval(alwaysCountdown); alwaysCountdown = null; }
 }
 
 export function tickApproval() {
@@ -1158,18 +1226,22 @@ setInterval(tickApproval, 1000);
 // screen: the answer is needed when someone is looking, and a phone in a pocket should not poll all night.
 setInterval(() => { if (!PREVIEW && !idle()) loadApprovals(); }, 5000);
 
-export async function decide(decision) {
+export async function decide(decision, value, label) {
   const a = approvals[0];
   if (!a || submitting.has(a.id)) return;
   haptic();
   submitting.add(a.id);
-  $('apAllow').disabled = $('apDeny').disabled = $('apSkip').disabled = true;
+  $('apAllow').disabled = $('apDeny').disabled = $('apAlways').disabled = $('apSkip').disabled = $('apCustomSend').disabled = true;
+  document.querySelectorAll('#apChoices .ap-opt').forEach((b) => { b.disabled = true; });
   let accepted = false;
   try {
-    await api(`/approvals/${encodeURIComponent(a.id)}?decision=${decision}`, 'POST', 4000);
+    // an answer carries its value as a second parameter; allow / always / deny / skip are plain flags
+    const q = value === undefined ? `decision=${decision}` : `decision=answer&value=${encodeURIComponent(value)}`;
+    await api(`/approvals/${encodeURIComponent(a.id)}?${q}`, 'POST', 4000);
     accepted = true;
     if (decision === 'skip') toast(t('panel.questionWaiting'), 'warn');
-    else toast(t(decision === 'allow' ? 'panel.allowedTool' : 'panel.deniedTool', { tool: a.tool }), decision === 'allow' ? 'ok' : 'err');
+    else if (decision === 'answer') toast(t('panel.answered', { answer: label || value || '' }), 'ok');
+    else toast(t(decision === 'allow' ? 'panel.allowedTool' : decision === 'always' ? 'panel.allowedAlways' : 'panel.deniedTool', { tool: a.tool }), decision === 'deny' ? 'err' : 'ok');
   } catch (_) { toast(t('panel.alreadyAnswered'), 'warn'); }
   finally { submitting.delete(a.id); }
   if (!accepted) {
@@ -1179,18 +1251,28 @@ export async function decide(decision) {
     // moved on to another approval while this one was in flight, and unlocking that one would let a second
     // answer go out for a prompt whose own post is still running.
     if (approvals[0] && approvals[0].id === a.id) {
-      $('apAllow').disabled = $('apDeny').disabled = $('apSkip').disabled = false;
+      $('apAllow').disabled = $('apDeny').disabled = $('apAlways').disabled = $('apSkip').disabled = $('apCustomSend').disabled = false;
+      document.querySelectorAll('#apChoices .ap-opt').forEach((b) => { b.disabled = false; });
     }
     return;
   }
+  if (decision === 'answer') $('apCustomText').value = '';
   answered.add(a.id);
   if (answered.size > answeredCap) answered.delete(answered.values().next().value);
   approvals = approvals.filter((x) => x.id !== a.id);
   renderApproval();
 }
 $('apAllow').addEventListener('click', () => decide('allow'));
+$('apAlways').addEventListener('click', () => decide('always'));
 $('apDeny').addEventListener('click', () => decide('deny'));
 $('apSkip').addEventListener('click', () => decide('skip'));
+
+function sendCustomAnswer() {
+  const v = $('apCustomText').value.trim();
+  if (v) decide('answer', v, v);
+}
+$('apCustomSend').addEventListener('click', sendCustomAnswer);
+$('apCustomText').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); sendCustomAnswer(); } });
 
 export function handleEvent(e) {
   if (PREVIEW && (e.kind === 'goto' || e.kind === 'back' || e.kind === 'reload')) return; // the editor picks the page

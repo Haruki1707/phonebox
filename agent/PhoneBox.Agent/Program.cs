@@ -75,6 +75,7 @@ AddMonitor<MediaMonitor>(builder.Services);
 AddMonitor<QuotaMonitor>(builder.Services);
 AddMonitor<ProcessMonitor>(builder.Services);
 AddMonitor<SessionMonitor>(builder.Services);
+AddMonitor<OpenCodeApprovals>(builder.Services);
 AddMonitor<FeedMonitor>(builder.Services);
 builder.Services.AddSingleton<PhotoFrame>();
 builder.Services.AddSingleton<CameraFeeds>();
@@ -731,7 +732,22 @@ app.MapGet("/api/work/conversation", (string id, ConfigStore cfg, SessionMonitor
 
 // Permission prompts waiting for the phone (posted by the Claude Code hook, see ClaudeHook.cs).
 app.MapGet("/api/approvals", (ApprovalStore a) => Results.Json(new { items = a.Snapshot() }));
-app.MapPost("/api/approvals/{id}", (string id, string decision, ApprovalStore a) => a.Decide(id, decision) ? Results.Ok() : Results.NotFound());
+app.MapPost("/api/approvals/{id}", (string id, string decision, string? value, ApprovalStore a) =>
+    a.Decide(id, decision, value) ? Results.Ok() : Results.NotFound());
+
+// OpenCode's background services (see OpenCodeApprovals): found or not, without their passwords — one for the native
+// account, one more per WSL distro. The settings page can show whether OpenCode prompts can reach the phone.
+app.MapGet("/api/opencode/service", (OpenCodeApprovals o, ConfigStore cfg) =>
+{
+    var services = o.LastServices;
+    return Results.Json(new
+    {
+        found = services.Count > 0,
+        urls = services.Select(s => s.Url).ToList(),
+        versions = services.Select(s => s.Version).ToList(),
+        approvals = cfg.Get().OpenCode.PhoneApprovals,
+    });
+});
 
 // Spectrum bars widget: each call keeps audio capture running for a few seconds and returns the latest bands
 // (the live stream also sends them as "spectrum" events; panels without the stream poll this instead).

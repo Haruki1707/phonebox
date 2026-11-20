@@ -21,6 +21,7 @@ public sealed class AgentConfig
     public ClaudeConfig Claude { get; set; } = new();
     /// <summary>Cursor agent-transcript sessions on the AI sessions widget (off by default).</summary>
     public CursorConfig Cursor { get; set; } = new();
+    public OpenCodeConfig OpenCode { get; set; } = new();
     public List<PageConfig> Pages { get; set; } = [];
     public List<Shortcut> Shortcuts { get; set; } = [];
     public List<RuleConfig> Rules { get; set; } = [];
@@ -83,6 +84,8 @@ public sealed class AgentConfig
         // names only (for the Rules widget); what a rule matches on stays here
         rules = Rules.Select(r => new { r.Id, r.Name, r.Enabled, r.When }),
         charge = new { Charge.Enabled, Charge.Min, Charge.Max },
+        // OpenCode prompts: how long the Allow always button waits before it can be pressed (it saves a pattern)
+        opencode = new { OpenCode.AlwaysCountdownSec, OpenCode.WatchWsl },
     };
 
     /// <summary>Ending processes is allowed when an enabled page has a processes widget that allows it.</summary>
@@ -235,6 +238,20 @@ public sealed class CursorConfig
 {
     /// <summary>Show recent Cursor agent chats on the AI sessions widget (off by default).</summary>
     public bool Sessions { get; set; }
+}
+
+public sealed class OpenCodeConfig
+{
+    /// <summary>Show OpenCode permission prompts on the phone (needs OpenCode's background service; see the guide).</summary>
+    public bool PhoneApprovals { get; set; } = true;
+    /// <summary>How long the phone may answer before the prompt is left to OpenCode's own window on the desktop.</summary>
+    public int TimeoutSec { get; set; } = 90;
+    /// <summary>Only use the phone when the PC has been idle for a minute (OpenCode's own prompt is on the screen otherwise).</summary>
+    public bool OnlyWhenAway { get; set; }
+    /// <summary>Seconds the Allow always button waits before it can be pressed (it saves a pattern for the project); 0 arms it at once.</summary>
+    public int AlwaysCountdownSec { get; set; } = 10;
+    /// <summary>Also watch OpenCode running inside WSL distros (stopped distros are never started for this).</summary>
+    public bool WatchWsl { get; set; } = true;
 }
 
 public sealed class PageConfig
@@ -562,6 +579,9 @@ public sealed partial class ConfigStore(string path)
         c.Claude ??= new();
         c.Claude.TimeoutSec = Math.Clamp(c.Claude.TimeoutSec, 10, 3600);
         c.Cursor ??= new();
+        c.OpenCode ??= new();
+        c.OpenCode.TimeoutSec = Math.Clamp(c.OpenCode.TimeoutSec, 10, 3600);
+        c.OpenCode.AlwaysCountdownSec = Math.Clamp(c.OpenCode.AlwaysCountdownSec, 0, 60);
         if (string.IsNullOrWhiteSpace(c.Updates.Repo)) c.Updates.Repo = "ersinkoc/phonebox";
         c.Lan.Port = Math.Clamp(c.Lan.Port, 1024, 65535);
         if (string.IsNullOrWhiteSpace(c.Lan.Token)) c.Lan.Token = NewToken();

@@ -19,6 +19,7 @@ public sealed record AgentSession(string Id, string Tool, string Name, string Pr
 ///  - Claude Code: ~/.claude/sessions/{pid}.json (status files written by Claude Code itself)
 ///  - Codex: the latest events in recent rollout files under ~/.codex/sessions
 ///  - Cursor (opt-in): recent agent transcripts under ~/.cursor/projects/*/agent-transcripts
+///  - OpenCode: recent sessions from the local HTTP API of its background service (native and in WSL)
 /// </summary>
 public sealed class SessionMonitor(ILogger<SessionMonitor> log, ConfigStore? config = null) : BackgroundService
 {
@@ -59,6 +60,7 @@ public sealed class SessionMonitor(ILogger<SessionMonitor> log, ConfigStore? con
             var list = new List<AgentSession>();
             try { list.AddRange(ReadClaude(titles: ShareTitles)); } catch (Exception ex) { log.LogDebug("claude sessions: {Msg}", ex.Message); }
             try { list.AddRange(ReadCodex()); } catch (Exception ex) { log.LogDebug("codex sessions: {Msg}", ex.Message); }
+            try { list.AddRange(await OpenCodeSessions.ReadAsync(log, ct, wslEnabled: config?.Get().OpenCode.WatchWsl ?? true)); } catch (Exception ex) { log.LogDebug("opencode sessions: {Msg}", ex.Message); }
             // Cursor sessions are off until Settings › General › Cursor sessions is enabled.
             if (config?.Get().Cursor.Sessions == true)
             {

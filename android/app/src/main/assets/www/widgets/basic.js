@@ -652,7 +652,10 @@ W.sessions = {
     box.append(h('div', 'w-head', h('span', 's-label', t('w.sessions')), sum), list);
     box.style.setProperty('--c', '#d97757');
     const tokens = (n) => n == null ? '—' : n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n);
-    const statusText = (s) => s.status === 'busy' ? t('sess.working') : s.status === 'waiting' ? t('sess.waiting') : s.status === 'shell' ? t('sess.shell') : s.outcome === 'completed' ? t('sess.completed') : s.outcome === 'aborted' ? t('sess.aborted') : t('sess.idle');
+    const statusText = (s) => s.status === 'busy' ? t('sess.working') : s.status === 'waiting' ? t('sess.waiting') : s.status === 'shell' ? t('sess.shell') : s.outcome === 'completed' ? t('sess.completed') : s.outcome === 'failed' ? t('sess.failed') : s.outcome === 'aborted' ? t('sess.aborted') : t('sess.idle');
+    // The tool each session comes from: one glyph in the list, a glyph and a name in the details panel.
+    const toolIcon = (tool) => tool === 'claude' ? '✳' : tool === 'codex' ? '◎' : tool === 'cursor' ? '◆' : tool === 'opencode' ? '◈' : '◎';
+    const toolTitle = (tool) => tool === 'claude' ? 'Claude Code' : tool === 'codex' ? 'Codex' : tool === 'cursor' ? 'Cursor' : tool === 'opencode' ? 'OpenCode' : 'Codex';
     const ageText = (since) => Date.now() - since < 60_000 ? 'just now' : shortDur(Date.now() - since) + ' ago';
     // A Claude Code chat's title (the agent sends it only when Settings › Claude Code › "Show session titles on the phone"
     // is on) is the main label and the folder goes under it; without a title the folder is the label, as before.
@@ -741,7 +744,7 @@ W.sessions = {
       const dismiss = () => { stopConversation(); backdrop.remove(); document.removeEventListener('keydown', onKey); };
       close.addEventListener('click', dismiss);
       backdrop.addEventListener('click', (e) => { if (e.target === backdrop) dismiss(); });
-      panel.append(h('div', 'session-panel-head', h('span', null, s.tool === 'codex' ? '◎ Codex' : s.tool === 'cursor' ? '◆ Cursor' : '✳ Claude Code'), close), title);
+      panel.append(h('div', 'session-panel-head', h('span', null, toolIcon(s.tool) + ' ' + toolTitle(s.tool)), close), title);
       const rows = [
         ['Folder', folderOf(s) || null],
         ['Status', statusText(s)],
@@ -780,7 +783,7 @@ W.sessions = {
         const sorted = [...sessions].sort((a, b) => (S_ORDER[a.status] ?? 9) - (S_ORDER[b.status] ?? 9) || b.since - a.since);
         const rows = sorted.length ? sorted.map((s) => {
           const row = h('button', 'sess ' + s.status,
-            h('span', 'st'), h('span', 'tl ' + s.tool, s.tool === 'claude' ? '✳' : s.tool === 'cursor' ? '◆' : '◎'),
+            h('span', 'st'), h('span', 'tl ' + s.tool, toolIcon(s.tool)),
             h('span', 'sess-main', h('span', 'nm', titleOf(s)), h('span', 'sess-meta', [folderOf(s), [s.model, s.effort].filter(Boolean).join(' · ') || statusText(s)].filter(Boolean).join(' · '))),
             h('span', 'ds', shortDur(Date.now() - s.since)));
           row.type = 'button';

@@ -12,6 +12,22 @@
   longer hides the sign-in Claude Code renews in the Keychain. Once the file's token is missing or expired, the agent
   reads the Keychain too and uses the sign-in that expires later, instead of showing "Token expired" for good (#277,
   [sonvc94](https://github.com/sonvc94)).
+- **OpenCode permission prompts on the phone.** When OpenCode's background service asks for permission (run a
+  command, edit a file…), the phone shows the request with Allow, Always allow and Deny — the same card Claude Code
+  uses, with no setup: the agent reads the pending requests from OpenCode's local API
+  (`~/.local/state/opencode/service.json` names the port and password, which never leaves the computer). Allow
+  answers once, Always allow also saves OpenCode's proposed pattern for the project, Deny rejects, and a prompt
+  answered in OpenCode first simply leaves the phone. `"phoneApprovals": false` in the `opencode` section of
+  `config.json` leaves every prompt to OpenCode's own window. OpenCode's agent questions ("route A, B or C, or type
+  your own") ride the same card: the answers appear as buttons, a custom answer gets a text field, and the pick is
+  sent straight back to OpenCode.
+- **OpenCode sessions — native and inside WSL — through the service's own API.** The sessions widget no longer opens
+  OpenCode's SQLite database: it reads the same local HTTP API the desktop app uses (authenticated with the password
+  from `service.json`, which never leaves the computer), so no database file can be locked by a running OpenCode and
+  sessions inside WSL distros reach the phone exactly like native ones. **Permission prompts and agent questions**
+  now come from every running service too — native and WSL side by side, each answer going back to the service that
+  asked. **Also watch OpenCode in WSL** (on by default, in Settings › General › OpenCode prompts) turns the WSL half
+  off; stopped distros are never started for a check.
 
 ## 0.9.22 — 2026-11-19
 
