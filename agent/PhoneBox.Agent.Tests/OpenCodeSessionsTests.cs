@@ -75,7 +75,8 @@ public sealed class OpenCodeSessionsTests : IDisposable
 
         var idle = Assert.Single(list, s => s.Id == "opencode:ses_a");
         Assert.Equal("opencode", idle.Tool);
-        Assert.Equal("wolfi-os-always-allow-test", idle.Name);  // the title as a kebab slug, like OpenCode's own
+        Assert.Equal("Always allow test", idle.Name);
+        Assert.Equal("Always allow test", idle.Title);          // the widget shows it as the label, project under it
         Assert.Equal("wolfi-os", idle.Project);
         Assert.Equal("idle", idle.Status);
         Assert.Equal("completed", idle.Outcome);                // succeeded, and no turn since
@@ -145,15 +146,26 @@ public sealed class OpenCodeSessionsTests : IDisposable
         Assert.All(_fake.Calls, c => Assert.Equal("GET /api/session", c));
     }
 
+    [Fact]
+    public async Task ALongTitleIsCappedLikeClaudes()
+    {
+        _fake.SessionsJson = """{"data":[""" + Session("ses_a", "/home/haruki/w", new string('x', 500), _now - 60_000) + """]}""";
+        var s = Assert.Single(await Read());
+        Assert.Equal(SessionMonitor.MaxTitleChars, s.Title!.Length);
+        Assert.Equal(s.Title, s.Name);
+    }
+
     [Theory]
-    [InlineData("Always allow test", "always-allow-test")]
-    [InlineData("PHP 8.6 YAML generation!", "php-8-6-yaml-generation")]
-    [InlineData("  Trimmed  title  ", "trimmed-title")]
-    [InlineData("你好世界", null)]                       // non-ASCII titles have no kebab form: the short id takes over
-    [InlineData("", null)]
-    [InlineData(null, null)]
-    public void TitlesBecomeKebabSlugs(string? title, string? expected) =>
-        Assert.Equal(expected, OpenCodeSessions.Slug(title));
+    [InlineData("Always allow test", "Always allow test", "Always allow test")]
+    [InlineData("   Padded title   ", "Padded title", "Padded title")]   // surrounding whitespace goes, the words stay human
+    [InlineData("   ", null, "ses_a")]                                   // no title: the short id is the name
+    public void TitlesAreTrimmedAndKeptHuman(string? title, string? expectedTitle, string expectedName)
+    {
+        _fake.SessionsJson = """{"data":[""" + Session("ses_a", "/home/haruki/w", title ?? "", _now - 60_000) + """]}""";
+        var s = Assert.Single(Read().Result);
+        Assert.Equal(expectedTitle, s.Title);
+        Assert.Equal(expectedName, s.Name);
+    }
 
     [Fact]
     public void DiscoveryCombinesTheNativePathWithRunningWslDistros()

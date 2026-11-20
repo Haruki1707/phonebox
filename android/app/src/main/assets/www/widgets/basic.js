@@ -657,8 +657,9 @@ W.sessions = {
     const toolIcon = (tool) => tool === 'claude' ? '✳' : tool === 'codex' ? '◎' : tool === 'cursor' ? '◆' : tool === 'opencode' ? '◈' : '◎';
     const toolTitle = (tool) => tool === 'claude' ? 'Claude Code' : tool === 'codex' ? 'Codex' : tool === 'cursor' ? 'Cursor' : tool === 'opencode' ? 'OpenCode' : 'Codex';
     const ageText = (since) => Date.now() - since < 60_000 ? 'just now' : shortDur(Date.now() - since) + ' ago';
-    // A Claude Code chat's title (the agent sends it only when Settings › Claude Code › "Show session titles on the phone"
-    // is on) is the main label and the folder goes under it; without a title the folder is the label, as before.
+    // A session's title is the main label and the project folder goes under it: Claude Code sends it only while
+    // Settings › Claude Code › "Show session titles on the phone" is on, OpenCode always does; without a title the
+    // folder is the label, as before.
     const titleOf = (s) => s.title || s.project || s.name;
     const folderOf = (s) => (s.title ? s.project : '');
     // A Claude Code chat's recent steps, last exchange and message list. The agent sends them only when Settings › Claude Code

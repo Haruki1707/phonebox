@@ -128,10 +128,12 @@ internal static class OpenCodeSessions
             var cacheRead = tokens is { } tk3 && Obj(tk3, "cache") is { } cache ? Long(cache, "read") ?? 0 : 0;
             var cacheWrite = tokens is { } tk4 && Obj(tk4, "cache") is { } cache2 ? Long(cache2, "write") ?? 0 : 0;
             var model = Obj(e, "model") is { } m ? Str(m, "id") : null;
+            var title = Str(e, "title") is { Length: > 0 } raw && raw.Trim().Length > 0 ? raw.Trim() : null;
+            if (title is { Length: > SessionMonitor.MaxTitleChars }) title = title[..SessionMonitor.MaxTitleChars];
             list.Add(new AgentSession(
                 Id: "opencode:" + id,
                 Tool: "opencode",
-                Name: $"{project.ToLowerInvariant()}-{Slug(Str(e, "title")) ?? ShortId(id)}",
+                Name: title ?? ShortId(id),
                 Project: project,
                 Status: busy ? "busy" : "idle",
                 WaitingFor: null,
@@ -145,27 +147,13 @@ internal static class OpenCodeSessions
                 ReasoningTokens: tokens is { } tk5 ? Long(tk5, "reasoning") ?? 0 : 0,
                 TurnStartedAt: busy ? busyAt : null,
                 Outcome: outcome,
-                LastTool: null)); // the last tool lives in the messages, which are never fetched
+                LastTool: null, // the last tool lives in the messages, which are never fetched
+                Title: title)); // the widget shows the title as the label with the project folder under it
         }
         return list;
     }
 
-    /// <summary>The title as the widget's session name shows it: kebab-cased, like OpenCode's own session slugs.</summary>
-    internal static string? Slug(string? title)
-    {
-        if (string.IsNullOrWhiteSpace(title)) return null;
-        var sb = new StringBuilder();
-        foreach (var ch in title.Trim().ToLowerInvariant())
-        {
-            if (char.IsAsciiLetterOrDigit(ch)) sb.Append(ch);
-            else if (sb.Length > 0 && sb[^1] != '-') sb.Append('-');
-            if (sb.Length >= 40) break;
-        }
-        var s = sb.ToString().Trim('-');
-        return s.Length == 0 ? null : s;
-    }
-
-    // session ids look like ses_<random>; the tail is enough to tell two chats with the same slug apart
+    // session ids look like ses_<random>; the tail is enough to tell two chats with the same title apart
     private static string ShortId(string id) => id.Length > 6 ? id[^6..] : id;
 
     private static JsonElement? Obj(JsonElement e, string p) =>

@@ -6,7 +6,7 @@ using System.Text.Json;
 namespace PhoneBox.Agent;
 
 /// <param name="Status">busy | waiting | shell | idle</param>
-/// <param name="Title">The chat's title (Claude Code only); set only while Settings › Claude Code › "Show session titles on the phone" is on.</param>
+/// <param name="Title">The chat's title: Claude Code sends it only while Settings › Claude Code › "Show session titles on the phone" is on; OpenCode always does (its widget label used to be the same text as a slug).</param>
 public sealed record AgentSession(string Id, string Tool, string Name, string Project, string Status,
     string? WaitingFor, long Since, long StartedAt, int? Pid = null,
     string? Model = null, string? Effort = null, long? TotalTokens = null, long? InputTokens = null,
@@ -39,13 +39,16 @@ public sealed class SessionMonitor(ILogger<SessionMonitor> log, ConfigStore? con
 
     /// <summary>
     /// The sessions, for everything that sends them anywhere (the live stream, /api/work, the rules). This is the one
-    /// place they leave this class, so the title setting is applied here: with it off no title comes out, however the
-    /// session was read.
+    /// place they leave this class, so the title setting is applied here: Claude Code's chats carry a title only while
+    /// Settings › Claude Code › "Show session titles on the phone" is on, while OpenCode's sessions always carry
+    /// theirs (the widget showed the same text as the session's slug before).
     /// </summary>
     public IReadOnlyList<AgentSession> Snapshot()
     {
         var all = _sessions;
-        return ShareTitles || !all.Any(s => s.Title is not null) ? all : all.Select(s => s with { Title = null }).ToList();
+        return ShareTitles || !all.Any(s => s.Title is not null)
+            ? all
+            : all.Select(s => s.Tool == "claude" ? s with { Title = null } : s).ToList();
     }
 
     private bool ShareTitles => config?.Get().Claude.ShareSessionTitles ?? false;

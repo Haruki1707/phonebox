@@ -184,7 +184,8 @@ prompt is answered in OpenCode first, the card simply goes away and OpenCode's w
 `"phoneApprovals": false` in the `opencode` section of `config.json` to leave every prompt to OpenCode.
 
 OpenCode inside WSL works the same way: each running distro's own service is discovered and watched, and its
-prompts, questions and sessions reach the phone like the native ones. The native and WSL services are polled side
+prompts, questions and sessions reach the phone like the native ones. Sessions show OpenCode's own session title
+with the project folder underneath, like Claude Code's titled chats. The native and WSL services are polled side
 by side and each answer goes back to the service that asked. **Also watch OpenCode in WSL** under Settings ›
 General › OpenCode prompts turns this off (it is on by default); a stopped distro is never started for a check.
 
