@@ -21,6 +21,8 @@ public sealed class AgentConfig
     public ClaudeConfig Claude { get; set; } = new();
     /// <summary>Cursor agent-transcript sessions on the AI sessions widget (off by default).</summary>
     public CursorConfig Cursor { get; set; } = new();
+    /// <summary>OpenCode prompts and sessions on the phone; everything is off until the settings page turns it on.</summary>
+    [JsonPropertyName("opencode")]
     public OpenCodeConfig OpenCode { get; set; } = new();
     public List<PageConfig> Pages { get; set; } = [];
     public List<Shortcut> Shortcuts { get; set; } = [];
@@ -245,16 +247,20 @@ public sealed class CursorConfig
 
 public sealed class OpenCodeConfig
 {
-    /// <summary>Show OpenCode permission prompts on the phone (needs OpenCode's background service; see the guide).</summary>
-    public bool PhoneApprovals { get; set; } = true;
+    /// <summary>Show OpenCode permission prompts on the phone. Off until Settings › General › OpenCode prompts turns
+    /// it on: letting the phone approve commands is opt-in, like Claude Code's hook install.</summary>
+    public bool PhoneApprovals { get; set; }
     /// <summary>How long the phone may answer before the prompt is left to OpenCode's own window on the desktop.</summary>
     public int TimeoutSec { get; set; } = 90;
     /// <summary>Only use the phone when the PC has been idle for a minute (OpenCode's own prompt is on the screen otherwise).</summary>
     public bool OnlyWhenAway { get; set; }
     /// <summary>Seconds the Allow always button waits before it can be pressed (it saves a pattern for the project); 0 arms it at once.</summary>
     public int AlwaysCountdownSec { get; set; } = 10;
-    /// <summary>Also watch OpenCode running inside WSL distros (stopped distros are never started for this).</summary>
-    public bool WatchWsl { get; set; } = true;
+    /// <summary>Also watch OpenCode inside WSL distros that are already running (see OpenCodeServices); off until turned on.</summary>
+    public bool WatchWsl { get; set; }
+    /// <summary>Show each OpenCode session's title on the phone. OpenCode draws the titles from the conversation,
+    /// so they stay off the phone until you turn this on, like Claude's shareSessionTitles.</summary>
+    public bool ShareSessionTitles { get; set; }
 }
 
 public sealed class PageConfig
