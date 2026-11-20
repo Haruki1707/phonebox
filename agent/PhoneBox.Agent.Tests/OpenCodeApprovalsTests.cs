@@ -36,6 +36,8 @@ public sealed class OpenCodeApprovalsTests : IDisposable
         public readonly List<string> Calls = [];
         /// <summary>The queue reads fail (a 503, as a slow or restarting service answers) while this is set.</summary>
         public volatile bool QueuesFail;
+        /// <summary>Only the question queue (/api/form) fails while this is set.</summary>
+        public volatile bool FormsFail;
 
         /// <param name="directory">The project directory the session list reports; a real path so the project name
         /// works out the same on Windows and Unix (Path.GetFileName).</param>
@@ -60,6 +62,8 @@ public sealed class OpenCodeApprovalsTests : IDisposable
                 lock (_lock) FormReplies.Add(body);
                 return new HttpResponseMessage(HttpStatusCode.NoContent);
             }
+            if ((QueuesFail || FormsFail) && url.Contains("/api/form") && req.Method == HttpMethod.Get)
+                return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
             if (QueuesFail && (url.Contains("/api/form") || url.Contains("/api/permission/request")))
                 return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
             var data = url.Contains("/api/session")
@@ -217,6 +221,24 @@ public sealed class OpenCodeApprovalsTests : IDisposable
         await monitor.PollOnceAsync(CancellationToken.None);
         await WaitUntil(() => store.Snapshot().Count == 0, "the answered prompt stayed on the phone");
         Assert.Empty(fake.Replies);
+    }
+
+    [Fact]
+    public async Task OneQueueFailingDoesNotHoldBackTheOther()
+    {
+        var fake = new FakeOpenCode(ProjDir) { QueueJson = QueueOne, FormsJson = FormOne };
+        var store = new ApprovalStore(_events, NullLogger<ApprovalStore>.Instance, _clock);
+        var monitor = Monitor(store, fake);
+        await monitor.PollOnceAsync(CancellationToken.None);
+        Assert.Equal(2, store.Snapshot().Count); // the permission and the question
+
+        // the desktop answered the permission while the question queue fails: the permission card goes, the
+        // question card (whose queue could not be read) stays
+        fake.QueueJson = """{"data":[]}""";
+        fake.FormsFail = true;
+        await monitor.PollOnceAsync(CancellationToken.None);
+        await WaitUntil(() => store.Snapshot().Count == 1, "the answered permission stayed on the phone");
+        Assert.Equal("question", Assert.Single(store.Snapshot()).Kind);
     }
 
     [Fact]

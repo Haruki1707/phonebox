@@ -139,9 +139,11 @@ public sealed class OpenCodeApprovals : BackgroundService
         var liveForms = new HashSet<string>();
         var queues = new Dictionary<string, (ServiceState State, OpenCodePermission Request)>();
         var formQueues = new Dictionary<string, (ServiceState State, OpenCodeForm Form)>();
-        // services with a queue that could not be read this round (a timeout, an error status, a bad body): their
-        // cards are neither withdrawn nor re-offered, since an unread queue is not an empty one
-        var unread = new List<string>();
+        // services whose permission or question queue could not be read this round (a timeout, an error status, a bad
+        // body): the cards from that queue are neither withdrawn nor re-offered, since an unread queue is not an empty
+        // one. The two queues are tracked apart, so one failing never holds back what the other confirmed.
+        var unreadRequests = new List<string>();
+        var unreadForms = new List<string>();
         foreach (var state in services)
         {
             var key = state.Path + "|";
@@ -150,7 +152,8 @@ public sealed class OpenCodeApprovals : BackgroundService
             // (directories x timeout)
             var batches = await Task.WhenAll(directories.Select(async directory =>
                 (Requests: await RequestsAsync(state, directory, ct), Forms: await FormsAsync(state, directory, ct))));
-            if (batches.Any(b => b.Requests is null || b.Forms is null)) unread.Add(key);
+            if (batches.Any(b => b.Requests is null)) unreadRequests.Add(key);
+            if (batches.Any(b => b.Forms is null)) unreadForms.Add(key);
             foreach (var batch in batches)
             {
                 // the same id can come back from the server's own scope and a project scope (the queue is read per
@@ -173,11 +176,14 @@ public sealed class OpenCodeApprovals : BackgroundService
         }
 
         // a request no longer in any queue was answered on the desktop (or the session ended): stop offering it
-        bool Unread(string id) => unread.Exists(id.StartsWith);
-        foreach (var id in _offered.Keys.Where(id => !live.Contains(id) && !Unread(id)).ToList()) Withdraw(id);
-        foreach (var id in _formOffers.Keys.Where(id => !liveForms.Contains(id) && !Unread(id)).ToList()) WithdrawForm(id);
-        foreach (var key in _dismissed.Keys) if (!liveForms.Contains(key) && !Unread(key)) _dismissed.TryRemove(key, out _);
-        foreach (var id in _expired.Where(id => !live.Contains(id) && !liveForms.Contains(id) && !Unread(id)).ToList()) _expired.Remove(id);
+        bool RequestsUnread(string id) => unreadRequests.Exists(id.StartsWith);
+        bool FormsUnread(string id) => unreadForms.Exists(id.StartsWith);
+        foreach (var id in _offered.Keys.Where(id => !live.Contains(id) && !RequestsUnread(id)).ToList()) Withdraw(id);
+        foreach (var id in _formOffers.Keys.Where(id => !liveForms.Contains(id) && !FormsUnread(id)).ToList()) WithdrawForm(id);
+        foreach (var key in _dismissed.Keys) if (!liveForms.Contains(key) && !FormsUnread(key)) _dismissed.TryRemove(key, out _);
+        // an expired id may be either kind: it is forgotten only once both queues were read and neither holds it
+        foreach (var id in _expired.Where(id => !live.Contains(id) && !liveForms.Contains(id) && !RequestsUnread(id) && !FormsUnread(id)).ToList())
+            _expired.Remove(id);
 
         if (onlyWhenAway && Idle.Seconds() < 60) return; // the desktop prompt is right there; the phone is for away
 
