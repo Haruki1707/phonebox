@@ -1147,7 +1147,9 @@ export function renderApproval() {
     if (nightOn) { wakeUntil = Date.now() + 60_000; setNight(false); }
     buzz('0,120,80,120,80,240');
     // A prompt whose answer is still in flight comes back locked: it can be shown again while its own post runs.
-    $('apAllow').disabled = $('apDeny').disabled = $('apAlways').disabled = $('apSkip').disabled = submitting.has(a.id);
+    // The Send button and the typed draft belong to the previous question: this one starts clean.
+    $('apAllow').disabled = $('apDeny').disabled = $('apAlways').disabled = $('apSkip').disabled = $('apCustomSend').disabled = submitting.has(a.id);
+    $('apCustomText').value = '';
     renderChoices(a);
     // Allow always saves a pattern for the whole project: give the thumb ten seconds (as configured) before it can
     // be pressed by accident.
@@ -1181,6 +1183,10 @@ export function renderApproval() {
   $('apDesc').textContent = a.description || '';
   $('apDetail').textContent = a.detail || '';
   $('apDetail').hidden = !a.detail;
+  // what Allow always would save for the project, so the card says what it agrees to from then on
+  const pattern = !asking && a.always && a.alwaysPattern ? t('panel.alwaysSaves', { pattern: a.alwaysPattern }) : '';
+  $('apPattern').textContent = pattern;
+  $('apPattern').hidden = !pattern;
   box.hidden = false;
   tickApproval();
 }
@@ -1270,14 +1276,19 @@ export async function decide(decision, value, label) {
     // here would leave nothing on screen while the computer waits; the buttons come back and the next list
     // request settles whether the prompt really is gone. Only for this prompt though: a list request may have
     // moved on to another approval while this one was in flight, and unlocking that one would let a second
-    // answer go out for a prompt whose own post is still running.
+    // answer go out for a prompt whose own post is still running. Allow always stays locked while its own
+    // countdown for this card is still running — a failed post does not arm it early.
     if (approvals[0] && approvals[0].id === a.id) {
-      $('apAllow').disabled = $('apDeny').disabled = $('apAlways').disabled = $('apSkip').disabled = $('apCustomSend').disabled = false;
+      const stillCounting = approvalShown === a.id && alwaysCountdown !== null;
+      $('apAllow').disabled = $('apDeny').disabled = $('apSkip').disabled = $('apCustomSend').disabled = false;
+      $('apAlways').disabled = stillCounting;
       document.querySelectorAll('#apChoices .ap-opt').forEach((b) => { b.disabled = false; });
     }
     return;
   }
-  if (decision === 'answer') $('apCustomText').value = '';
+  // The typed draft is cleared only while this card is still the one on screen: a late success (the post landed
+  // after the user had moved on) must not wipe the next question's draft. A card change clears it in renderApproval.
+  if (decision === 'answer' && approvals[0] && approvals[0].id === a.id) $('apCustomText').value = '';
   answered.add(a.id);
   if (answered.size > answeredCap) answered.delete(answered.values().next().value);
   approvals = approvals.filter((x) => x.id !== a.id);

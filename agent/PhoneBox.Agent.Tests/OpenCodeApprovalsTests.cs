@@ -21,6 +21,7 @@ public sealed class OpenCodeApprovalsTests : IDisposable
     /// <summary>The part of OpenCode the monitor talks to: known directories (from the session list), one queue, and a reply route.</summary>
     private sealed class FakeOpenCode : HttpMessageHandler
     {
+        private readonly object _lock = new();
         /// <summary>The queue as /api/permission/request answers it; null turns every read into a 404.</summary>
         public string? QueueJson = """{"data":[]}""";
         /// <summary>A second service's queue (the "b" port): a second OpenCode, native or inside WSL.</summary>
@@ -28,35 +29,41 @@ public sealed class OpenCodeApprovalsTests : IDisposable
         /// <summary>The pending forms as /api/form answers them; null turns every read into a 404.</summary>
         public string? FormsJson = """{"data":[]}""";
         /// <summary>The session list /api/session answers; its directories are what the queues get polled under.</summary>
-        public string SessionsJson = """{"data":[{"id":"ses_1","location":{"directory":"C:\\proj"}}]}""";
+        public string SessionsJson;
         public readonly List<string> Replies = [];
         public readonly List<string> ReplyUrls = [];
         public readonly List<string> FormReplies = [];
         public readonly List<string> Calls = [];
 
+        /// <param name="directory">The project directory the session list reports; a real path so the project name
+        /// works out the same on Windows and Unix (Path.GetFileName).</param>
+        public FakeOpenCode(string directory) => SessionsJson = JsonSerializer.Serialize(new
+        { data = new[] { new { id = "ses_1", location = new { directory } } } });
+
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage req, CancellationToken ct)
         {
             var url = req.RequestUri!.ToString();
-            Calls.Add(req.Method.Method + " " + url);
+            lock (_lock) Calls.Add(req.Method.Method + " " + url);
             if (req.Method == HttpMethod.Post && url.Contains("/permission/") && url.EndsWith("/reply"))
             {
                 using var reader = new StreamReader(req.Content!.ReadAsStream(ct), Encoding.UTF8);
-                Replies.Add(await reader.ReadToEndAsync(ct));
-                ReplyUrls.Add(url);
+                var body = await reader.ReadToEndAsync(ct);
+                lock (_lock) { Replies.Add(body); ReplyUrls.Add(url); }
                 return new HttpResponseMessage(HttpStatusCode.NoContent);
             }
             if (req.Method == HttpMethod.Post && url.Contains("/form/"))
             {
                 using var reader = new StreamReader(req.Content!.ReadAsStream(ct), Encoding.UTF8);
-                FormReplies.Add(await reader.ReadToEndAsync(ct));
+                var body = await reader.ReadToEndAsync(ct);
+                lock (_lock) FormReplies.Add(body);
                 return new HttpResponseMessage(HttpStatusCode.NoContent);
             }
-            var body = url.Contains("/api/session")
+            var data = url.Contains("/api/session")
                 ? SessionsJson
                 : url.Contains("/api/form") ? FormsJson
                 : url.Contains("/api/permission/request") ? (url.Contains(":28999") ? QueueJsonB : QueueJson) : null;
-            return new HttpResponseMessage(body is null ? HttpStatusCode.NotFound : HttpStatusCode.OK)
-            { Content = new StringContent(body ?? "", Encoding.UTF8, "application/json") };
+            return new HttpResponseMessage(data is null ? HttpStatusCode.NotFound : HttpStatusCode.OK)
+            { Content = new StringContent(data ?? "", Encoding.UTF8, "application/json") };
         }
     }
 
@@ -68,6 +75,13 @@ public sealed class OpenCodeApprovalsTests : IDisposable
     private readonly string _dir = Directory.CreateTempSubdirectory("pb-opencode-approvals-").FullName;
     private readonly PushStore _events;
     private readonly string _servicePath;
+
+    /// <summary>A real project directory (Path.GetFileName works on it the same way on every OS).</summary>
+    private static string ProjDir { get; } = Path.Combine(Path.GetTempPath(), "pb-proj");
+
+    private static string QueueOf(int count, string? save = null) => "{\"data\":[" + string.Join(",",
+        Enumerable.Range(1, count).Select(i => "{\"id\":\"per_" + i + "\",\"sessionID\":\"ses_1\",\"action\":\"shell\","
+            + "\"resources\":[\"cmd " + i + "\"]" + (save is null ? "" : ",\"save\":" + save) + "}")) + "]}";
 
     public OpenCodeApprovalsTests()
     {
@@ -85,9 +99,15 @@ public sealed class OpenCodeApprovalsTests : IDisposable
         Directory.Delete(_dir, recursive: true);
     }
 
-    private OpenCodeApprovals Monitor(ApprovalStore store, FakeOpenCode fake, string? servicePath = null) =>
-        new(store, NullLogger<OpenCodeApprovals>.Instance,
-            config: null, http: fake, clock: _clock, servicePaths: [servicePath ?? _servicePath]);
+    /// <summary>OpenCode prompts are off by default now, so the tests turn them on explicitly (with the WSL half on,
+    /// which the two-service test relies on).</summary>
+    private OpenCodeApprovals Monitor(ApprovalStore store, FakeOpenCode fake, string? servicePath = null)
+    {
+        var path = Path.Combine(_dir, "cfg-" + Guid.NewGuid().ToString("N") + ".json");
+        File.WriteAllText(path, """{"opencode":{"phoneApprovals":true,"watchWsl":true,"alwaysCountdownSec":10}}""");
+        return new OpenCodeApprovals(store, NullLogger<OpenCodeApprovals>.Instance,
+            config: new ConfigStore(path), http: fake, clock: _clock, servicePaths: [servicePath ?? _servicePath]);
+    }
 
     private static async Task WaitUntil(Func<bool> done, string what)
     {
@@ -120,7 +140,7 @@ public sealed class OpenCodeApprovalsTests : IDisposable
     [Fact]
     public async Task APendingPromptIsOfferedAndAllowAnswersOnce()
     {
-        var fake = new FakeOpenCode { QueueJson = QueueOne };
+        var fake = new FakeOpenCode(ProjDir) { QueueJson = QueueOne };
         var store = new ApprovalStore(_events, NullLogger<ApprovalStore>.Instance, _clock);
         var monitor = Monitor(store, fake);
 
@@ -129,7 +149,7 @@ public sealed class OpenCodeApprovalsTests : IDisposable
         var a = Assert.Single(store.Snapshot());
         Assert.Equal("per_1", a.Id);
         Assert.Equal("OpenCode", a.Source);
-        Assert.Equal("proj", a.Project);
+        Assert.Equal("pb-proj", a.Project);
         Assert.Equal("ses_1", a.Session);
         Assert.Equal("Run a command", a.Tool);
         Assert.Equal("Push the branch?\n\ngit push -f", a.Detail);
@@ -146,10 +166,11 @@ public sealed class OpenCodeApprovalsTests : IDisposable
     {
         foreach (var (decision, expected) in new[] { ("deny", "reject"), ("always", "always") })
         {
-            var fake = new FakeOpenCode { QueueJson = QueueOne };
+            var fake = new FakeOpenCode(ProjDir) { QueueJson = QueueOne };
             var store = new ApprovalStore(_events, NullLogger<ApprovalStore>.Instance, _clock);
             var monitor = Monitor(store, fake);
             await monitor.PollOnceAsync(CancellationToken.None);
+            _clock.Now += 30_000; // past the countdown, so "always" is allowed to be taken
             Assert.True(store.Decide("per_1", decision));
             await WaitUntil(() => fake.Replies.Count == 1, $"{decision} never reached OpenCode");
             Assert.Equal($$"""{"decision":"{{expected}}"}""", fake.Replies[0]);
@@ -159,7 +180,7 @@ public sealed class OpenCodeApprovalsTests : IDisposable
     [Fact]
     public async Task APromptAnsweredOnTheDesktopIsWithdrawnWithoutAReply()
     {
-        var fake = new FakeOpenCode { QueueJson = QueueOne };
+        var fake = new FakeOpenCode(ProjDir) { QueueJson = QueueOne };
         var store = new ApprovalStore(_events, NullLogger<ApprovalStore>.Instance, _clock);
         var monitor = Monitor(store, fake);
         await monitor.PollOnceAsync(CancellationToken.None);
@@ -174,7 +195,7 @@ public sealed class OpenCodeApprovalsTests : IDisposable
     [Fact]
     public async Task APromptArrivingWithoutAPhoneIsOfferedOnceOneConnects()
     {
-        var fake = new FakeOpenCode { QueueJson = QueueOne };
+        var fake = new FakeOpenCode(ProjDir) { QueueJson = QueueOne };
         var store = new ApprovalStore(_events, NullLogger<ApprovalStore>.Instance, _clock);
         var monitor = Monitor(store, fake);
         Interlocked.Exchange(ref ApprovalStore.PhoneLastSeen, 0); // no phone has polled in a while
@@ -188,25 +209,34 @@ public sealed class OpenCodeApprovalsTests : IDisposable
     }
 
     [Fact]
+    public async Task TheQueuesAreNotReadWhileNoPhoneIsListening()
+    {
+        var fake = new FakeOpenCode(ProjDir) { QueueJson = QueueOne };
+        var monitor = Monitor(new ApprovalStore(_events, NullLogger<ApprovalStore>.Instance, _clock), fake);
+        Interlocked.Exchange(ref ApprovalStore.PhoneLastSeen, 0);
+        await monitor.PollOnceAsync(CancellationToken.None);
+        Assert.Empty(fake.Calls); // nothing fetched at all: OpenCode's queues are only read for a waiting phone
+    }
+
+    [Fact]
     public async Task WithoutAServiceNothingIsOffered()
     {
-        var fake = new FakeOpenCode { QueueJson = QueueOne };
+        var fake = new FakeOpenCode(ProjDir) { QueueJson = QueueOne };
         var store = new ApprovalStore(_events, NullLogger<ApprovalStore>.Instance, _clock);
         var monitor = Monitor(store, fake, servicePath: Path.Combine(_dir, "missing.json"));
         await monitor.PollOnceAsync(CancellationToken.None);
         Assert.Empty(store.Snapshot());
-        Assert.Empty(monitor.LastServices);
     }
 
     [Fact]
     public async Task TheQueueIsPolledPerKnownDirectory()
     {
-        var fake = new FakeOpenCode { QueueJson = QueueOne };
+        var fake = new FakeOpenCode(ProjDir) { QueueJson = QueueOne };
         var monitor = Monitor(new ApprovalStore(_events, NullLogger<ApprovalStore>.Instance, _clock), fake);
         await monitor.PollOnceAsync(CancellationToken.None);
         // the directories come from the session list (every session knows where it lives — that works for WSL too)
         Assert.Contains(fake.Calls, c => c.Contains("/api/session") && !c.Contains("/reply"));
-        Assert.Contains(fake.Calls, c => c.Contains("/api/permission/request?location%5Bdirectory%5D=C%3A%5Cproj"));
+        Assert.Contains(fake.Calls, c => c.Contains("/api/permission/request?location%5Bdirectory%5D=" + Uri.EscapeDataString(ProjDir)));
     }
 
     /// <summary>Native OpenCode and OpenCode inside WSL are two services; both queues are offered, and each answer
@@ -218,14 +248,15 @@ public sealed class OpenCodeApprovalsTests : IDisposable
         var wsl = Path.Combine(_dir, "wsl", ".local", "state", "opencode", "service.json");
         Directory.CreateDirectory(Path.GetDirectoryName(wsl)!);
         File.WriteAllText(wsl, """{"url":"http://127.0.0.1:28999","password":"pw2","version":"2.3.2"}""");
-        var fake = new FakeOpenCode { QueueJson = QueueOne, QueueJsonB = """{"data":[{"id":"per_2","sessionID":"ses_9","action":"edit","resources":["main.rs"]}]}""" };
+        var fake = new FakeOpenCode(ProjDir) { QueueJson = QueueOne, QueueJsonB = """{"data":[{"id":"per_2","sessionID":"ses_9","action":"edit","resources":["main.rs"]}]}""" };
         var store = new ApprovalStore(_events, NullLogger<ApprovalStore>.Instance, _clock);
+        var path = Path.Combine(_dir, "cfg-two-" + Guid.NewGuid().ToString("N") + ".json");
+        File.WriteAllText(path, """{"opencode":{"phoneApprovals":true,"watchWsl":true}}""");
         var monitor = new OpenCodeApprovals(store, NullLogger<OpenCodeApprovals>.Instance,
-            config: null, http: fake, clock: _clock, servicePaths: [native, wsl]);
+            config: new ConfigStore(path), http: fake, clock: _clock, servicePaths: [native, wsl]);
 
         await monitor.PollOnceAsync(CancellationToken.None);
         Assert.Equal(2, store.Snapshot().Count);
-        Assert.Equal(2, monitor.LastServices.Count);
 
         Assert.True(store.Decide("per_1", "allow"));
         await WaitUntil(() => fake.Replies.Count == 1, "the native reply never reached OpenCode");
@@ -237,9 +268,10 @@ public sealed class OpenCodeApprovalsTests : IDisposable
         Assert.Equal("""{"decision":"reject"}""", fake.Replies[1]);
     }
 
-    /// <summary>The Claude hook has no "always": it allows, once. Real clock: the hook stamps expiry from UtcNow.</summary>
+    /// <summary>A card that does not offer Allow always never takes it — the hook's Claude Code cards included. The
+    /// hook still maps "always" to a one-time allow, but it can only ever receive it from a card that offered it.</summary>
     [Fact]
-    public async Task TheClaudeHookTakesAlwaysAsAnAllow()
+    public async Task TheClaudeHookRejectsAlwaysOnItsOwnCards()
     {
         var cfgPath = Path.Combine(_dir, "config.json");
         File.WriteAllText(cfgPath, "{}");
@@ -247,13 +279,53 @@ public sealed class OpenCodeApprovalsTests : IDisposable
         var sessions = new SessionMonitor(NullLogger<SessionMonitor>.Instance);
         var input = JsonDocument.Parse("""{"tool_name":"Bash","tool_input":{"command":"ls"},"cwd":"C:\\p","session_id":"s1"}""").RootElement.Clone();
 
-        var hook = ClaudeHook.HandleAsync(input, new ConfigStore(cfgPath), store, sessions, CancellationToken.None);
+        using var cts = new CancellationTokenSource();
+        var hook = ClaudeHook.HandleAsync(input, new ConfigStore(cfgPath), store, sessions, cts.Token);
         await WaitUntil(() => store.Snapshot().Count == 1, "the hook never offered the prompt");
-        Assert.True(store.Decide(store.Snapshot()[0].Id, "always"));
-        var output = await hook;
-        var json = JsonSerializer.Serialize(output, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
-        using var doc = JsonDocument.Parse(json);
-        Assert.Equal("allow", doc.RootElement.GetProperty("hookSpecificOutput").GetProperty("decision").GetProperty("behavior").GetString());
+        Assert.False(store.Snapshot()[0].Always); // the card offers no Allow always
+        Assert.False(store.Decide(store.Snapshot()[0].Id, "always"));
+        Assert.Single(store.Snapshot()); // the prompt is still waiting: nothing was answered
+        cts.Cancel(); // the user answered in the terminal; the hook gives up waiting
+        Assert.Null(await hook);
+    }
+
+    /// <summary>Allow always is tied to its card here as well: refused before the countdown, accepted once it is over.</summary>
+    [Fact]
+    public async Task AlwaysWaitsForTheCountdownAndNamesThePattern()
+    {
+        var fake = new FakeOpenCode(ProjDir) { QueueJson = QueueOf(1, save: """["echo *"]""") };
+        var store = new ApprovalStore(_events, NullLogger<ApprovalStore>.Instance, _clock);
+        var monitor = Monitor(store, fake);
+        await monitor.PollOnceAsync(CancellationToken.None);
+
+        var a = Assert.Single(store.Snapshot());
+        Assert.True(a.Always);
+        Assert.Equal("echo *", a.AlwaysPattern); // the card says what Allow always would save
+        Assert.Equal(100_000 + 10_000, a.AlwaysNotBefore); // the default countdown, stamped by the monitor
+
+        Assert.False(store.Decide("per_1", "always")); // the countdown is not over; the card is still live
+        Assert.Single(store.Snapshot());
+        _clock.Now += 10_001;
+        Assert.True(store.Decide("per_1", "always"));
+        await WaitUntil(() => fake.Replies.Count == 1, "the reply never reached OpenCode");
+        Assert.Equal("""{"decision":"always"}""", fake.Replies[0]);
+    }
+
+    /// <summary>An expired card's slot is free again: the request (still queued in OpenCode) is offered afresh.</summary>
+    [Fact]
+    public async Task TimedOutOffersMakeRoomForNewOnes()
+    {
+        var fake = new FakeOpenCode(ProjDir) { QueueJson = QueueOf(9) };
+        var store = new ApprovalStore(_events, NullLogger<ApprovalStore>.Instance, _clock);
+        var monitor = Monitor(store, fake);
+        await monitor.PollOnceAsync(CancellationToken.None);
+        Assert.Equal(8, store.Snapshot().Count); // the cap
+
+        _clock.Now += 90_001; // the windows were stamped 90 s out: every card is past its expiry now
+        await monitor.PollOnceAsync(CancellationToken.None);
+        var fresh = store.Snapshot();
+        Assert.NotEmpty(fresh);
+        Assert.All(fresh, a => Assert.True(a.ExpiresAt > _clock.Now, "an expired card was still being offered"));
     }
 
     [Fact]
@@ -268,7 +340,7 @@ public sealed class OpenCodeApprovalsTests : IDisposable
     [Fact]
     public async Task AnAgentQuestionIsOfferedWithItsChoicesAndTheAnswerReachesTheForm()
     {
-        var fake = new FakeOpenCode { QueueJson = """{"data":[]}""", FormsJson = FormOne };
+        var fake = new FakeOpenCode(ProjDir) { QueueJson = """{"data":[]}""", FormsJson = FormOne };
         var store = new ApprovalStore(_events, NullLogger<ApprovalStore>.Instance, _clock);
         var monitor = Monitor(store, fake);
         await monitor.PollOnceAsync(CancellationToken.None);
@@ -291,7 +363,7 @@ public sealed class OpenCodeApprovalsTests : IDisposable
     [Fact]
     public async Task AQuestionAnsweredOnTheDesktopIsWithdrawnWithoutAReply()
     {
-        var fake = new FakeOpenCode { QueueJson = """{"data":[]}""", FormsJson = FormOne };
+        var fake = new FakeOpenCode(ProjDir) { QueueJson = """{"data":[]}""", FormsJson = FormOne };
         var store = new ApprovalStore(_events, NullLogger<ApprovalStore>.Instance, _clock);
         var monitor = Monitor(store, fake);
         await monitor.PollOnceAsync(CancellationToken.None);
@@ -307,7 +379,7 @@ public sealed class OpenCodeApprovalsTests : IDisposable
     public async Task AFormWithoutTapAnswersIsShownAsTextOnly()
     {
         var multi = """{"data":[{"id":"frm_2","sessionID":"ses_1","title":"Details","fields":[{"key":"a","title":"Name","description":"Your name?","type":"string"},{"key":"b","title":"OK?","type":"boolean"}]}]}""";
-        var fake = new FakeOpenCode { QueueJson = """{"data":[]}""", FormsJson = multi };
+        var fake = new FakeOpenCode(ProjDir) { QueueJson = """{"data":[]}""", FormsJson = multi };
         var store = new ApprovalStore(_events, NullLogger<ApprovalStore>.Instance, _clock);
         var monitor = Monitor(store, fake);
         await monitor.PollOnceAsync(CancellationToken.None);
@@ -318,8 +390,63 @@ public sealed class OpenCodeApprovalsTests : IDisposable
         Assert.Contains("Name: Your name?", a.Detail);
         Assert.Null(a.Options);   // nothing to tap: answered at the PC
         Assert.False(a.Custom);
-        Assert.True(store.Decide(a.Id, "answer", "whatever")); // the phone could still send something…
+        Assert.False(store.Decide(a.Id, "answer", "whatever")); // not an answer this card takes
+        Assert.True(store.Decide(a.Id, "skip"));                // "Got it" ends the card…
+        await WaitUntil(() => store.Snapshot().Count == 0, "the dismissed question stayed on the phone");
         await WaitUntil(() => fake.FormReplies.Count == 0, "a text-only form was answered after all");
+    }
+
+    /// <summary>"Got it" on a question the phone cannot answer: nothing goes back to OpenCode, and the same form is
+    /// not offered again on every poll while it stays queued. A new form is.</summary>
+    [Fact]
+    public async Task GotItDismissesAQuestionWithoutReplyingAndItDoesNotBounceBack()
+    {
+        var noTap = """{"data":[{"id":"frm_4","sessionID":"ses_1","title":"Questions","fields":[{"key":"q0","title":"Where?","description":"Answer at the PC.","type":"string"}]}]}""";
+        var fake = new FakeOpenCode(ProjDir) { QueueJson = """{"data":[]}""", FormsJson = noTap };
+        var store = new ApprovalStore(_events, NullLogger<ApprovalStore>.Instance, _clock);
+        var monitor = Monitor(store, fake);
+        await monitor.PollOnceAsync(CancellationToken.None);
+        var a = Assert.Single(store.Snapshot());
+        Assert.False(store.Decide(a.Id, "answer", "somewhere")); // nothing to tap and no custom field
+        Assert.True(store.Decide(a.Id, "skip"));
+        await WaitUntil(() => store.Snapshot().Count == 0, "the card never ended");
+
+        await monitor.PollOnceAsync(CancellationToken.None); // the form is still queued on OpenCode's side
+        Assert.Empty(store.Snapshot());                      // …but it is not offered again
+
+        fake.FormsJson = """{"data":[{"id":"frm_5","sessionID":"ses_1","title":"Questions","fields":[{"key":"q0","title":"Where?","description":"Answer at the PC.","type":"string"}]}]}""";
+        await monitor.PollOnceAsync(CancellationToken.None); // a new question is a new card
+        Assert.Single(store.Snapshot());
+        Assert.Empty(fake.FormReplies);
+    }
+
+    /// <summary>A question with fixed choices only takes one of them; with a custom field anything typed goes too.</summary>
+    [Fact]
+    public async Task AnAnswerMustBeOneOfTheChoicesUnlessTheCardAllowsTyping()
+    {
+        var fixedChoices = """{"data":[{"id":"frm_6","sessionID":"ses_1","title":"Questions","fields":[{"key":"q0","title":"Route","type":"string","options":[{"value":"a","label":"Route A"},{"value":"b","label":"Route B"}]}]}]}""";
+        var fake = new FakeOpenCode(ProjDir) { QueueJson = """{"data":[]}""", FormsJson = fixedChoices };
+        var store = new ApprovalStore(_events, NullLogger<ApprovalStore>.Instance, _clock);
+        var monitor = Monitor(store, fake);
+        await monitor.PollOnceAsync(CancellationToken.None);
+        var a = Assert.Single(store.Snapshot());
+        Assert.False(a.Custom);
+        Assert.False(store.Decide(a.Id, "answer", "zzz")); // not one of the card's choices
+        Assert.Single(store.Snapshot());
+        Assert.True(store.Decide(a.Id, "answer", "b"));
+        await WaitUntil(() => fake.FormReplies.Count == 1, "the answer never reached the form");
+        Assert.Equal("""{"answer":{"q0":"b"}}""", fake.FormReplies[0]);
+
+        // the same question with a custom field: any typed answer goes
+        fake.FormsJson = """{"data":[{"id":"frm_7","sessionID":"ses_1","title":"Questions","fields":[{"key":"q0","title":"Route","type":"string","custom":true,"options":[{"value":"a","label":"Route A"},{"value":"b","label":"Route B"}]}]}]}""";
+        var store2 = new ApprovalStore(_events, NullLogger<ApprovalStore>.Instance, _clock);
+        var monitor2 = Monitor(store2, fake);
+        await monitor2.PollOnceAsync(CancellationToken.None);
+        var b = Assert.Single(store2.Snapshot());
+        Assert.True(b.Custom);
+        Assert.True(store2.Decide(b.Id, "answer", "route C, please"));
+        await WaitUntil(() => fake.FormReplies.Count == 2, "the custom answer never reached the form");
+        Assert.Equal("""{"answer":{"q0":"route C, please"}}""", fake.FormReplies[1]);
     }
 
     [Fact]
@@ -329,21 +456,47 @@ public sealed class OpenCodeApprovalsTests : IDisposable
         File.WriteAllText(path, """{"opencode": {"alwaysCountdownSec": 500}}""");
         var cfg = new ConfigStore(path).Get();
         Assert.Equal(60, cfg.OpenCode.AlwaysCountdownSec);
-        Assert.True(cfg.OpenCode.WatchWsl); // WSL watching is on by default
+        Assert.False(cfg.OpenCode.PhoneApprovals); // off until the settings page turns it on
+        Assert.False(cfg.OpenCode.WatchWsl);       // WSL watching is opt-in too
+        Assert.False(cfg.OpenCode.ShareSessionTitles);
     }
 
-    /// <summary>A Claude hook has nowhere to put a typed answer: it must not count as a decision.</summary>
     [Fact]
-    public async Task TheClaudeHookIgnoresAnswerValues()    {
+    public void TheServiceMustBeOnThisMachinesLoopback()
+    {
+        var write = (string json) =>
+        {
+            var path = Path.Combine(_dir, "svc-" + Guid.NewGuid().ToString("N") + ".json");
+            File.WriteAllText(path, json);
+            return path;
+        };
+        Assert.NotNull(OpenCodeApprovals.ReadService(write("""{"url":"http://127.0.0.1:28894","password":"pw"}""")));
+        Assert.NotNull(OpenCodeApprovals.ReadService(write("""{"url":"http://localhost:28894/","password":"pw"}""")));
+        Assert.NotNull(OpenCodeApprovals.ReadService(write("""{"url":"http://[::1]:28894","password":"pw"}""")));
+        Assert.Null(OpenCodeApprovals.ReadService(write("""{"url":"http://192.168.1.20:28894","password":"pw"}""")));  // another machine
+        Assert.Null(OpenCodeApprovals.ReadService(write("""{"url":"http://10.0.0.5:28894","password":"pw"}""")));      // another network
+        Assert.Null(OpenCodeApprovals.ReadService(write("""{"url":"https://127.0.0.1:28894","password":"pw"}""")));    // not the plain local service
+        Assert.Null(OpenCodeApprovals.ReadService(write("""{"url":"file:///etc/opencode","password":"pw"}""")));
+        Assert.Null(OpenCodeApprovals.ReadService(write("""{"url":"not a url","password":"pw"}""")));
+    }
+
+    /// <summary>A Claude question card has no answers to tap: a typed answer is not an answer it takes, so the
+    /// question stays waiting and Claude Code asks in the terminal.</summary>
+    [Fact]
+    public async Task TheClaudeHookIgnoresAnswerValues()
+    {
         var cfgPath = Path.Combine(_dir, "config2.json");
         File.WriteAllText(cfgPath, "{}");
         var store = new ApprovalStore(_events, NullLogger<ApprovalStore>.Instance, TimeProvider.System);
         var sessions = new SessionMonitor(NullLogger<SessionMonitor>.Instance);
         var input = JsonDocument.Parse("""{"tool_name":"AskUserQuestion","tool_input":{"questions":[]},"cwd":"C:\\p","session_id":"s2"}""").RootElement.Clone();
 
-        var hook = ClaudeHook.HandleAsync(input, new ConfigStore(cfgPath), store, sessions, CancellationToken.None);
+        using var cts = new CancellationTokenSource();
+        var hook = ClaudeHook.HandleAsync(input, new ConfigStore(cfgPath), store, sessions, cts.Token);
         await WaitUntil(() => store.Snapshot().Count == 1, "the hook never offered the question");
-        Assert.True(store.Decide(store.Snapshot()[0].Id, "answer", "Route A"));
+        Assert.False(store.Decide(store.Snapshot()[0].Id, "answer", "Route A"));
+        Assert.Single(store.Snapshot()); // still waiting: nothing was answered
+        cts.Cancel();
         Assert.Null(await hook); // no output: Claude Code asks in the terminal as usual
     }
 }

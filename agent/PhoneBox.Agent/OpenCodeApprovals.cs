@@ -8,8 +8,9 @@ namespace PhoneBox.Agent;
 
 /// <summary>One pending permission request from OpenCode's queue.</summary>
 /// <param name="Directory">The project directory the request was polled under (null = the server's own location).</param>
+/// <param name="Save">The patterns Allow always would save for the project (OpenCode proposes them); empty = none.</param>
 internal sealed record OpenCodePermission(string Id, string SessionId, string Action, string[] Resources,
-    string? Message, string? Directory);
+    string? Message, string? Directory, string[]? Save = null);
 
 /// <summary>One pending form from OpenCode — the structured channel agent questions travel on.</summary>
 /// <param name="Directory">The project directory the form was polled under (null = the server's own location).</param>
@@ -23,12 +24,14 @@ internal sealed record OpenCodeFormField(string Key, string? Title, string? Desc
 /// <summary>
 /// OpenCode permission prompts on the phone. OpenCode 2.x runs one background service per user account
 /// (opencode serve --service) and keeps its address and password in ~/.local/state/opencode/service.json — one for
-/// the native account, one more for each WSL distro it runs in (see <see cref="OpenCodeServices"/>). All of them are
-/// polled here over 127.0.0.1, and every pending request is offered to the phone through <see cref="ApprovalStore"/>,
-/// the same Allow / Deny card Claude Code uses. The phone's answer is posted back to the service that asked:
-/// allow → "once", always → "always" (OpenCode saves the pattern for the project), deny → "reject". A prompt
-/// answered on the desktop first disappears from the queue, the offer is withdrawn and nothing is posted. No answer
-/// in time (or no phone) also posts nothing, and OpenCode's own prompt on the desktop stays as usual.
+/// the native account, one more for each running WSL distro that has one (see <see cref="OpenCodeServices"/>). All
+/// of them are polled here over 127.0.0.1 — only while the user turned OpenCode prompts on (off by default,
+/// Settings › General) and a phone is listening — and every pending request is offered through
+/// <see cref="ApprovalStore"/>, the same Allow / Deny card Claude Code uses. The phone's answer is posted back to
+/// the service that asked: allow → "once", always → "always" (OpenCode saves the pattern for the project), deny →
+/// "reject". A prompt answered on the desktop first disappears from the queue, the offer is withdrawn and nothing is
+/// posted. No answer in time (or no phone) also posts nothing, and OpenCode's own prompt on the desktop stays as
+/// usual.
 /// </summary>
 public sealed class OpenCodeApprovals : BackgroundService
 {
@@ -61,13 +64,19 @@ public sealed class OpenCodeApprovals : BackgroundService
     private readonly TimeProvider _clock;
     private readonly string[]? _servicePaths;    // fixed by tests; null = discover native + WSL
 
-    // the offers in flight: "service url|request id" → the AskAsync task and the cancel that withdraws it when the
-    // request vanishes from the queue (answered on the desktop, rejected with the session, service gone)
-    private readonly ConcurrentDictionary<string, (Task Task, CancellationTokenSource Cancel)> _offered = new();
+    // the offers in flight: "service.json path|request id" → the AskAsync task, the cancel that withdraws it when the
+    // request vanishes from the queue (answered on the desktop, rejected with the session, service gone), and the
+    // moment the card's own window ends (offers that nobody answered free their slot then, not only when the
+    // AskAsync task happens to finish)
+    private readonly ConcurrentDictionary<string, (Task Task, CancellationTokenSource Cancel, long ExpiresAt)> _offered = new();
     // the same for forms (agent questions): form id → offer
-    private readonly ConcurrentDictionary<string, (Task Task, CancellationTokenSource Cancel)> _formOffers = new();
-    private readonly Dictionary<string, ServiceState> _services = new(); // by url
-    private readonly Dictionary<string, (long Length, DateTime Written)> _stamps = new(); // by service.json path
+    private readonly ConcurrentDictionary<string, (Task Task, CancellationTokenSource Cancel, long ExpiresAt)> _formOffers = new();
+    // forms the phone answered with "Got it" (it cannot answer them): not offered again while they stay queued, so
+    // the card does not bounce back every poll; forgotten when the form leaves the queue
+    private readonly ConcurrentDictionary<string, byte> _dismissed = new();
+    private readonly Dictionary<string, ServiceState> _services = new(); // by service.json path
+    // the stamps are also read on a 401 (GetAsync runs on the parallel queue reads' threads), so they are concurrent
+    private readonly ConcurrentDictionary<string, (long Length, DateTime Written)> _stamps = new(); // by service.json path
     private List<string> _paths = [];                    // the service.json files watched
     private long _nextPathScan;
 
@@ -85,8 +94,10 @@ public sealed class OpenCodeApprovals : BackgroundService
         _http = new HttpClient(http ?? new HttpClientHandler()) { Timeout = HttpTimeout };
     }
 
-    private (bool Enabled, bool OnlyWhenAway, int TimeoutSec, bool WatchWsl) Settings =>
-        _config?.Get().OpenCode is { } c ? (c.PhoneApprovals, c.OnlyWhenAway, c.TimeoutSec, c.WatchWsl) : (true, false, 90, true);
+    private (bool Enabled, bool OnlyWhenAway, int TimeoutSec, bool WatchWsl, int CountdownSec) Settings =>
+        _config?.Get().OpenCode is { } c
+            ? (c.PhoneApprovals, c.OnlyWhenAway, c.TimeoutSec, c.WatchWsl, c.AlwaysCountdownSec)
+            : (false, false, 90, false, 10);
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -104,71 +115,103 @@ public sealed class OpenCodeApprovals : BackgroundService
     /// <summary>One pass over every OpenCode queue: offer new requests, withdraw answered ones. Also the test entry point.</summary>
     internal async Task PollOnceAsync(CancellationToken ct)
     {
-        var (enabled, onlyWhenAway, timeoutSec, watchWsl) = Settings;
+        var (enabled, onlyWhenAway, timeoutSec, watchWsl, countdownSec) = Settings;
         if (!enabled) { WithdrawAll(); return; }
+
+        // offers whose window ended (nobody answered in time) free their slot again here; the request is usually
+        // still in OpenCode's queue, so the next round offers it afresh with a new window
+        FreeEndedOffers();
+
+        // The queues are only read while a phone is actually listening: without one there is nothing to offer, and
+        // OpenCode's own prompt on the desktop keeps waiting all the same. Offers already on their way keep their
+        // window; the next poll with the phone back re-reads everything.
+        if (!ApprovalStore.PhoneConnected) return;
         var services = CurrentServices(watchWsl);
         if (services.Count == 0) { WithdrawAll(); return; }
 
-        // the requests and questions live per service; the offer keys carry the service url, so two services can
-        // never withdraw each other's cards
+        // the requests and questions live per service; the offer keys carry the service.json path, so two services
+        // (even two on the same port) can never withdraw each other's cards
         var live = new HashSet<string>();
         var liveForms = new HashSet<string>();
-        var queues = new Dictionary<string, List<OpenCodePermission>>();
-        var formQueues = new Dictionary<string, List<OpenCodeForm>>();
+        var queues = new Dictionary<string, (ServiceState State, OpenCodePermission Request)>();
+        var formQueues = new Dictionary<string, (ServiceState State, OpenCodeForm Form)>();
         foreach (var state in services)
         {
-            var key = state.Info.Url + "|";
+            var key = state.Path + "|";
             var directories = await DirectoriesAsync(state, ct);
-            var requests = new List<OpenCodePermission>();
-            var forms = new List<OpenCodeForm>();
-            foreach (var directory in directories)
-                foreach (var req in await RequestsAsync(state, directory, ct)) requests.Add(req);
-            foreach (var directory in directories)
-                foreach (var form in await FormsAsync(state, directory, ct)) forms.Add(form);
-            foreach (var req in requests) { live.Add(key + req.Id); queues[key + req.Id] = [req]; }
-            foreach (var form in forms) { liveForms.Add(key + form.Id); formQueues[key + form.Id] = [form]; }
+            // all of a service's directory reads go out together: one hung request must not stretch the round to
+            // (directories x timeout)
+            var batches = await Task.WhenAll(directories.Select(async directory =>
+                (Requests: await RequestsAsync(state, directory, ct), Forms: await FormsAsync(state, directory, ct))));
+            foreach (var batch in batches)
+            {
+                // the same id can come back from the server's own scope and a project scope (the queue is read per
+                // directory); the one polled under a project directory is the one its card is named after
+                foreach (var req in batch.Requests)
+                {
+                    var id = key + req.Id;
+                    live.Add(id);
+                    if (!queues.TryGetValue(id, out var known) || (known.Request.Directory is null && req.Directory is not null))
+                        queues[id] = (state, req);
+                }
+                foreach (var form in batch.Forms)
+                {
+                    var id = key + form.Id;
+                    liveForms.Add(id);
+                    if (!formQueues.TryGetValue(id, out var knownForm) || (knownForm.Form.Directory is null && form.Directory is not null))
+                        formQueues[id] = (state, form);
+                }
+            }
         }
 
         // a request no longer in any queue was answered on the desktop (or the session ended): stop offering it
         foreach (var id in _offered.Keys.Where(id => !live.Contains(id)).ToList()) Withdraw(id);
         foreach (var id in _formOffers.Keys.Where(id => !liveForms.Contains(id)).ToList()) WithdrawForm(id);
+        foreach (var key in _dismissed.Keys) if (!liveForms.Contains(key)) _dismissed.TryRemove(key, out _);
 
         if (onlyWhenAway && Idle.Seconds() < 60) return; // the desktop prompt is right there; the phone is for away
-        // AskAsync would drop the offer at once when no phone is polling, and the request would never be offered
-        // again even after a phone shows up (OpenCode's own prompt keeps waiting, unlike Claude's terminal). So only
-        // offer to a phone that is there right now; while it is away the next poll simply tries again.
-        if (!ApprovalStore.PhoneConnected) return;
 
-        var expiresAt = _clock.GetUtcNow().ToUnixTimeMilliseconds() + Math.Clamp(timeoutSec, 10, 3600) * 1000L;
-        foreach (var pair in queues)
+        var now = _clock.GetUtcNow().ToUnixTimeMilliseconds();
+        var expiresAt = now + Math.Clamp(timeoutSec, 10, 3600) * 1000L;
+        foreach (var (id, (state, request)) in queues)
         {
             if (_offered.Count >= MaxOffered) break;
-            var (key, list) = (pair.Key, pair.Value[0]);
-            if (_offered.ContainsKey(key)) continue;
-            var state = services.First(s => s.Info.Url + "|" == key[..(s.Info.Url.Length + 1)]);
+            if (_offered.ContainsKey(id)) continue;
             var cancel = new CancellationTokenSource();
             // called directly, not via Task.Run: AskAsync registers the offer synchronously up to its first await,
             // so the phone's very next list request already sees it
-            _offered[key] = (OfferAsync(list, state.Info, expiresAt, cancel.Token), cancel);
+            _offered[id] = (OfferAsync(request, state.Info, expiresAt, countdownSec, cancel.Token), cancel, expiresAt);
         }
-        foreach (var pair in formQueues)
+        foreach (var (id, (state, form)) in formQueues)
         {
             if (_formOffers.Count >= MaxOffered) break;
-            var (key, list) = (pair.Key, pair.Value[0]);
-            if (_formOffers.ContainsKey(key)) continue;
-            var state = services.First(s => s.Info.Url + "|" == key[..(s.Info.Url.Length + 1)]);
+            if (_formOffers.ContainsKey(id) || _dismissed.ContainsKey(id)) continue;
             var cancel = new CancellationTokenSource();
-            _formOffers[key] = (OfferFormAsync(list, state.Info, expiresAt, cancel.Token), cancel);
+            _formOffers[id] = (OfferFormAsync(id, form, state.Info, expiresAt, cancel.Token), cancel, expiresAt);
         }
     }
 
-    private async Task OfferAsync(OpenCodePermission req, ServiceInfo service, long expiresAt, CancellationToken ct)
+    /// <summary>Drops the entries whose offer has ended — the task finished (answered, withdrawn) or the card's
+    /// window ran out — so the MaxOffered cap counts only the cards that are actually live.</summary>
+    private void FreeEndedOffers()
+    {
+        var now = _clock.GetUtcNow().ToUnixTimeMilliseconds();
+        foreach (var id in _offered.Keys.ToList())
+            if (_offered[id].Task.IsCompleted || _offered[id].ExpiresAt <= now) Withdraw(id);
+        foreach (var id in _formOffers.Keys.ToList())
+            if (_formOffers[id].Task.IsCompleted || _formOffers[id].ExpiresAt <= now) WithdrawForm(id);
+    }
+
+    private async Task OfferAsync(OpenCodePermission req, ServiceInfo service, long expiresAt, int countdownSec, CancellationToken ct)
     {
         try
         {
+            var now = _clock.GetUtcNow().ToUnixTimeMilliseconds();
             var approval = new Approval(req.Id, "OpenCode", req.SessionId, ProjectOf(req.Directory),
-                ToolTitle(req.Action), Detail(req), null, _clock.GetUtcNow().ToUnixTimeMilliseconds(), expiresAt,
-                Always: true); // OpenCode takes an Allow always: it saves the proposed pattern for the project
+                ToolTitle(req.Action), Detail(req), null, now, expiresAt,
+                Always: true, // OpenCode takes an Allow always: it saves the proposed pattern for the project
+                AlwaysNotBefore: now + Math.Clamp(countdownSec, 0, 60) * 1000L,
+                AlwaysPattern: req.Save is { Length: > 0 } ? string.Join(", ", req.Save) : null);
             // AskAsync emits the offer to the phone, waits for its decision, and returns null once the window is over
             var decision = await _approvals.AskAsync(approval, ct);
             if (decision is "allow" or "always" or "deny")
@@ -202,7 +245,7 @@ public sealed class OpenCodeApprovals : BackgroundService
     /// Offers an agent question to the phone. A single-field form becomes a card with one button per choice (and a
     /// text field when OpenCode allows a custom answer); anything else is shown as text, answered at the PC.
     /// </summary>
-    private async Task OfferFormAsync(OpenCodeForm form, ServiceInfo service, long expiresAt, CancellationToken ct)
+    private async Task OfferFormAsync(string key, OpenCodeForm form, ServiceInfo service, long expiresAt, CancellationToken ct)
     {
         try
         {
@@ -216,6 +259,14 @@ public sealed class OpenCodeApprovals : BackgroundService
                 Custom: single?.Custom == true);
             // AskAsync emits the offer, waits, and returns the picked answer (or null once the window is over)
             var answer = await _approvals.AskAsync(approval, ct);
+            if (answer == "skip")
+            {
+                // "Got it": the phone has nothing to tap and the answer belongs to the PC. Nothing goes back to
+                // OpenCode, and the same form is not offered again every poll while it stays queued.
+                _dismissed[key] = 1;
+                _log.LogDebug("opencode question {Id}: dismissed on the phone; the PC answers", form.Id);
+                return;
+            }
             if (answer is { } value && single is { } field)
                 await ReplyFormAsync(form, service, field, value, CancellationToken.None); // deliver a taken answer even if withdrawn
         }
@@ -269,7 +320,8 @@ public sealed class OpenCodeApprovals : BackgroundService
 
     /// <summary>
     /// Re-reads every watched service.json when it changed, so a restarted service (new port and password) is picked
-    /// up, and services appearing or disappearing (WSL distros waking and sleeping) are noticed.
+    /// up, and services appearing or disappearing (WSL distros starting and stopping) are noticed. Tracked per
+    /// service.json file, so a native and a WSL service that happen to share a port stay two services.
     /// </summary>
     private List<ServiceState> CurrentServices(bool watchWsl)
     {
@@ -282,23 +334,23 @@ public sealed class OpenCodeApprovals : BackgroundService
         var seen = new HashSet<string>();
         foreach (var path in _paths)
         {
-            if (!File.Exists(path)) { _stamps.Remove(path); continue; }
+            if (!File.Exists(path)) { _stamps.TryRemove(path, out _); continue; }
             var info = new FileInfo(path);
             var stamp = (info.Length, info.LastWriteTimeUtc);
             if (_stamps.TryGetValue(path, out var known) && stamp == known)
             {
                 // unchanged, and already tracked: keep it (and mark it seen, or the sweep below would drop it)
-                foreach (var s in _services.Values.Where(s => s.Path == path)) seen.Add(s.Info.Url);
+                if (_services.ContainsKey(path)) seen.Add(path);
                 continue;
             }
             var read = ReadService(path);
             _stamps[path] = read is null ? default : stamp; // unreadable (perhaps still being written): retry next pass
             if (read is null) continue;
-            seen.Add(read.Url);
-            if (!_services.TryGetValue(read.Url, out var state))
+            seen.Add(path);
+            if (!_services.TryGetValue(path, out var state))
             {
                 state = new ServiceState { Info = read, Path = path };
-                _services[read.Url] = state;
+                _services[path] = state;
                 _log.LogInformation("opencode service at {Url} (v{Version}){Wsl}", read.Url, read.Version,
                     path.Contains("wsl.localhost", StringComparison.OrdinalIgnoreCase) ? " · WSL" : "");
             }
@@ -307,11 +359,10 @@ public sealed class OpenCodeApprovals : BackgroundService
                 if (state.Info.Password != read.Password || state.Info.Version != read.Version)
                     _log.LogInformation("opencode service at {Url} re-read (v{Version})", read.Url, read.Version);
                 state.Info = read;
-                state.Path = path;
                 state.Reauth = false;
             }
         }
-        foreach (var url in _services.Keys.Where(url => !seen.Contains(url)).ToList()) _services.Remove(url);
+        foreach (var path in _services.Keys.Where(path => !seen.Contains(path)).ToList()) _services.Remove(path);
         return _services.Values.ToList();
     }
 
@@ -340,9 +391,24 @@ public sealed class OpenCodeApprovals : BackgroundService
             var url = Str(r, "url");
             var password = Str(r, "password");
             if (string.IsNullOrEmpty(url) || string.IsNullOrEmpty(password)) return null;
-            return new ServiceInfo(url.TrimEnd('/'), password, Str(r, "version") ?? "");
+            var address = url.TrimEnd('/');
+            if (!IsLoopbackService(address)) return null; // the Basic header goes to OpenCode's own service only
+            return new ServiceInfo(address, password, Str(r, "version") ?? "");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { return null; }
+    }
+
+    /// <summary>
+    /// True when the address is the plain-HTTP service on this machine's loopback interface. Anything else (another
+    /// host, https, or no address at all) is refused: a service.json is written by OpenCode for its own local
+    /// service, and one that pointed elsewhere would send the password there or let a stranger put prompts on the
+    /// phone.
+    /// </summary>
+    internal static bool IsLoopbackService(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var u)) return false;
+        if (u.Scheme != "http" || u.Authority.Length == 0) return false;
+        return u.Host is "127.0.0.1" or "localhost" or "::1" or "[::1]";
     }
 
     /// <summary>
@@ -403,7 +469,12 @@ public sealed class OpenCodeApprovals : BackgroundService
                 var resources = e.TryGetProperty("resources", out var rs) && rs.ValueKind == JsonValueKind.Array
                     ? rs.EnumerateArray().Where(v => v.ValueKind == JsonValueKind.String).Select(v => v.GetString() ?? "").ToArray()
                     : [];
-                list.Add(new OpenCodePermission(id, sessionId, action, resources, Str(e, "message"), directory));
+                // the patterns an Allow always would save for the project, as OpenCode proposes them
+                var save = e.TryGetProperty("save", out var sv) && sv.ValueKind == JsonValueKind.Array
+                    ? sv.EnumerateArray().Where(v => v.ValueKind == JsonValueKind.String)
+                        .Select(v => v.GetString() ?? "").Where(s => s.Length > 0).ToArray()
+                    : [];
+                list.Add(new OpenCodePermission(id, sessionId, action, resources, Str(e, "message"), directory, save));
             }
             return list;
         }
@@ -420,7 +491,7 @@ public sealed class OpenCodeApprovals : BackgroundService
         if (res.StatusCode == HttpStatusCode.Unauthorized)
         {
             state.Reauth = true;
-            _stamps.Remove(state.Path); // the service.json changed underneath us: read it again
+            _stamps.TryRemove(state.Path, out _); // the service.json changed underneath us: read it again
         }
         return res;
     }
@@ -486,9 +557,6 @@ public sealed class OpenCodeApprovals : BackgroundService
         foreach (var id in _offered.Keys.ToList()) Withdraw(id);
         foreach (var id in _formOffers.Keys.ToList()) WithdrawForm(id);
     }
-
-    /// <summary>The services this monitor last found, for /api/opencode/service. Empty while none is running.</summary>
-    internal IReadOnlyList<ServiceInfo> LastServices => _services.Values.Select(s => s.Info).ToList();
 
     /// <summary>The same project name the sessions widget shows: the folder's basename.</summary>
     internal static string ProjectOf(string? directory)

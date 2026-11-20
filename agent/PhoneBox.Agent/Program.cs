@@ -754,20 +754,6 @@ app.MapGet("/api/approvals", (ApprovalStore a) => Results.Json(new { items = a.S
 app.MapPost("/api/approvals/{id}", (string id, string decision, string? value, ApprovalStore a) =>
     a.Decide(id, decision, value) ? Results.Ok() : Results.NotFound());
 
-// OpenCode's background services (see OpenCodeApprovals): found or not, without their passwords — one for the native
-// account, one more per WSL distro. The settings page can show whether OpenCode prompts can reach the phone.
-app.MapGet("/api/opencode/service", (OpenCodeApprovals o, ConfigStore cfg) =>
-{
-    var services = o.LastServices;
-    return Results.Json(new
-    {
-        found = services.Count > 0,
-        urls = services.Select(s => s.Url).ToList(),
-        versions = services.Select(s => s.Version).ToList(),
-        approvals = cfg.Get().OpenCode.PhoneApprovals,
-    });
-});
-
 // Spectrum bars widget: each call keeps audio capture running for a few seconds and returns the latest bands
 // (the live stream also sends them as "spectrum" events; panels without the stream poll this instead).
 // Only band levels leave the agent, never audio; nothing is captured unless an enabled page has the widget.

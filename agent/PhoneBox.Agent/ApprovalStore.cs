@@ -9,9 +9,14 @@ namespace PhoneBox.Agent;
 /// <param name="Options">For a question: the answers to pick from, in order.</param>
 /// <param name="Custom">For a question: a typed answer is accepted too (OpenCode's "custom" field flag).</param>
 /// <param name="Always">Offer an Allow always button: true for OpenCode's permission prompts (OpenCode saves the pattern).</param>
+/// <param name="AlwaysNotBefore">Earliest moment Allow always may be taken: the countdown, checked here too — the
+/// phone's own countdown is a guard rail, not the security check.</param>
+/// <param name="AlwaysPattern">What Allow always would save for the project (OpenCode's proposed pattern), shown on
+/// the card so the user can see what they would allow from then on.</param>
 public sealed record Approval(string Id, string Source, string Session, string Project, string Tool, string Detail,
     string? Description, long CreatedAt, long ExpiresAt, string Kind = "permission",
-    ApprovalOption[]? Options = null, bool Custom = false, bool Always = false);
+    ApprovalOption[]? Options = null, bool Custom = false, bool Always = false,
+    long AlwaysNotBefore = 0, string? AlwaysPattern = null);
 
 /// <summary>One answer an agent question can be answered with.</summary>
 public sealed record ApprovalOption(string Value, string Label, string? Description);
@@ -70,17 +75,40 @@ public sealed class ApprovalStore(PushStore events, ILogger<ApprovalStore> log)
 
     public bool Decide(string id, string decision, string? value = null)
     {
-        // "always" is OpenCode's Allow always (it saves the pattern for the project); ClaudeHook treats it as a plain
-        // allow. "answer" answers an agent question with a choice from the card (or a typed answer) — the value is
-        // what the question's reply carries, so it is passed through as the decision itself.
-        var result = decision switch
+        if (!_pending.TryGetValue(id, out var p)) return false;
+        var a = p.Approval;
+        var now = _clock.GetUtcNow().ToUnixTimeMilliseconds();
+        if (a.ExpiresAt <= now) return false;
+        // An answer is tied to the card it answers — the phone's countdown is a guard rail, not the security check.
+        // A permission card takes allow / deny, and "always" only when the card offers it (OpenCode saves the
+        // pattern) and not before the countdown. A question card takes an answer: one of the card's choices, or a
+        // typed answer when the card allows one. "skip" ("Got it") ends a question the phone cannot answer, without
+        // a decision. Anything else is not this card's answer and is refused.
+        string? result;
+        if (a.Kind == "question")
         {
-            "allow" or "always" or "deny" or "skip" => decision,
-            "answer" when !string.IsNullOrWhiteSpace(value) => value.Trim()[..Math.Min(500, value.Trim().Length)],
-            _ => null,
-        };
-        if (result is null || !_pending.TryGetValue(id, out var p)) return false;
-        if (p.Approval.ExpiresAt <= _clock.GetUtcNow().ToUnixTimeMilliseconds()) return false;
+            var v = value?.Trim() ?? "";
+            if (v.Length > 500) v = v[..500];
+            if (decision == "skip" && a.Options is not { Length: > 0 } && !a.Custom) result = "skip";
+            else if (decision == "answer" && v.Length > 0
+                && (a.Custom || (a.Options is { Length: > 0 } && Array.Exists(a.Options, o => o.Value == v))))
+                result = v;
+            else result = null;
+        }
+        else
+        {
+            result = decision switch
+            {
+                "allow" or "deny" => decision,
+                "always" when a.Always && now >= a.AlwaysNotBefore => "always",
+                _ => null,
+            };
+        }
+        if (result is null)
+        {
+            log.LogDebug("approval {Id}: refused {Decision} (not an answer this card takes)", id, decision);
+            return false;
+        }
         // accepted only if it wins against the timeout and the cancel (see AskAsync), and only then logged as such
         if (!p.Decision.TrySetResult(result)) return false;
         log.LogInformation("approval {Id}: {Decision} from the phone", id, decision);
