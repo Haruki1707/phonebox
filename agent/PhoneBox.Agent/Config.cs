@@ -24,6 +24,8 @@ public sealed class AgentConfig
     public OpenCodeConfig OpenCode { get; set; } = new();
     /// <summary>The OpenRouter API key for the quota ring; a secret that stays in config.json and never goes to the phone.</summary>
     public OpenRouterConfig OpenRouter { get; set; } = new();
+    /// <summary>Which GitHub CLI installs feed the GitHub widget (Windows and/or running WSL distros).</summary>
+    public GitHubConfig GitHub { get; set; } = new();
     public List<PageConfig> Pages { get; set; } = [];
     public List<Shortcut> Shortcuts { get; set; } = [];
     public List<RuleConfig> Rules { get; set; } = [];
@@ -254,6 +256,15 @@ public sealed class OpenCodeConfig
     public int AlwaysCountdownSec { get; set; } = 10;
     /// <summary>Also watch OpenCode running inside WSL distros (stopped distros are never started for this).</summary>
     public bool WatchWsl { get; set; } = true;
+}
+
+public sealed class GitHubConfig
+{
+    /// <summary>Which installs the GitHub widget reads: "auto" merges Windows and every running WSL distro,
+    /// "windows" uses only the Windows gh, "wsl" only the WSL ones.</summary>
+    public string Mode { get; set; } = "auto";
+    /// <summary>A single WSL distro to use; empty means every running distro whose default user has gh.</summary>
+    public string WslDistro { get; set; } = "";
 }
 
 public sealed class PageConfig
@@ -586,6 +597,10 @@ public sealed partial class ConfigStore(string path)
         c.OpenCode ??= new();
         c.OpenCode.TimeoutSec = Math.Clamp(c.OpenCode.TimeoutSec, 10, 3600);
         c.OpenCode.AlwaysCountdownSec = Math.Clamp(c.OpenCode.AlwaysCountdownSec, 0, 60);
+        c.GitHub ??= new();
+        c.GitHub.Mode = c.GitHub.Mode is "windows" or "wsl" ? c.GitHub.Mode : "auto";
+        c.GitHub.WslDistro = (c.GitHub.WslDistro ?? "").Trim();
+        if (c.GitHub.WslDistro.Length > 64) c.GitHub.WslDistro = "";
         if (string.IsNullOrWhiteSpace(c.Updates.Repo)) c.Updates.Repo = "ersinkoc/phonebox";
         c.Lan.Port = Math.Clamp(c.Lan.Port, 1024, 65535);
         if (string.IsNullOrWhiteSpace(c.Lan.Token)) c.Lan.Token = NewToken();

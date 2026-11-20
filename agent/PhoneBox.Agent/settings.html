@@ -640,6 +640,22 @@ nav a.on::before { color: var(--accent); }
       </div>
 
       <div class="card">
+        <h3 data-i18n="s.github.title">GitHub</h3>
+        <p class="hint" style="margin:0 0 12px" data-i18n="s.github.hint">The GitHub widget reads the GitHub CLI (gh). It can use the Windows install, the one inside a running WSL distro, or both: merged answers show the same pull request or notification once.</p>
+        <div class="grid2">
+          <div class="field"><label data-i18n="s.github.source">GitHub CLI sources</label>
+            <select data-bind="github.mode">
+              <option value="auto" data-i18n="s.github.merge">Merge Windows and WSL</option>
+              <option value="windows" data-i18n="s.github.windowsOnly">Windows only</option>
+              <option value="wsl" data-i18n="s.github.wslOnly">WSL only</option>
+            </select></div>
+          <div class="field"><label data-i18n="s.github.distro">WSL distro</label>
+            <select data-bind="github.wslDistro" id="ghDistros"><option value="" data-i18n="s.github.allDistros">Every running distro</option></select></div>
+        </div>
+        <div class="row"><button class="btn sm" id="ghRefresh" data-i18n="s.github.check">Check sources</button><span class="hint" id="ghState"></span></div>
+      </div>
+
+      <div class="card">
         <h3 data-i18n="s.obs.title">OBS Studio</h3>
         <div class="row" style="margin-bottom:8px"><label class="switch"><input type="checkbox" data-bind="obs.enabled"><span></span></label> <span data-i18n-html="s.obs.enable">Connect to OBS (for the <b>OBS</b> widget, the On air widget and rules)</span></div>
         <p class="hint" style="margin:0 0 12px" data-i18n-html="s.obs.hint">In OBS: Tools › WebSocket Server Settings › <i>Enable WebSocket server</i>; copy the password from <i>Show Connect Info</i>.</p>
@@ -3214,9 +3230,34 @@ async function loadInfo() {
 function fillDefaults() {
   cfg.pages = fitPages(cfg.pages); cfg.shortcuts ??= []; cfg.rules ??= []; cfg.display ??= {}; cfg.night = { enabled: true, start: '00:30', end: '07:30', brightness: 0.02, ...cfg.night }; cfg.weather ??= {}; cfg.weather.unit ??= 'celsius'; cfg.weather.model ??= ''; cfg.photos ??= { folder: '', subfolders: true }; cfg.lan ??= { enabled: false, port: 8766 }; cfg.updates ??= { auto: true, repo: 'ersinkoc/phonebox' }; cfg.claude ??= { phoneApprovals: true, timeoutSec: 90, onlyWhenAway: false, shareSessionTitles: false, shareConversation: false }; cfg.opencode ??= { phoneApprovals: true, timeoutSec: 90, onlyWhenAway: false, alwaysCountdownSec: 10, watchWsl: true }; cfg.openRouter ??= { apiKey: '' };
   cfg.codexBar ??= { providers: ['claude', 'codex', 'antigravity'], rotate: true, pageSize: 2, rotateInterval: 8 };
+  cfg.github = { mode: 'auto', wslDistro: '', ...cfg.github };
   for (const [k, v] of Object.entries({ language: 'auto', hour12: false, idleReturnSec: 90, switchCountdownSec: 3, touchGraceSec: 20, minDwellSec: 15, holdMaxMin: 30, keepAwake: true,
     showSeconds: true, vibrate: true, finishToast: true, volumeKeys: true, artTint: true, proximityWake: true, orientation: 'landscape', theme: 'default', accent: '#2dd4bf' })) cfg.display[k] ??= v;
   cfg.charge ??= { enabled: false, min: 50, max: 80, method: 'ha' };
+}
+
+// Settings › GitHub: fill the distro list from what is installed and show, in one line, which gh the widget can read.
+// A stopped distro is reported (when it is the one already chosen) but never started by this check.
+async function loadGitHubSources() {
+  const sel = $('ghDistros'), state = $('ghState');
+  if (!sel || !state) return;
+  const current = cfg.github?.wslDistro || '';
+  state.textContent = t('s.github.checking');
+  try {
+    const d = await (await fetch('/api/github/sources')).json();
+    const distros = d.distros || [];
+    const opts = [h('option', { value: '' }, t('s.github.allDistros'))];
+    distros.forEach((w) => opts.push(h('option', { value: w.name }, w.name + (w.available ? '' : ' — ' + t('s.github.ghMissing')))));
+    if (current && !distros.some((w) => w.name === current))
+      opts.push(h('option', { value: current }, current + ' — ' + t('s.github.notRunning')));
+    sel.replaceChildren(...opts);
+    sel.value = current;
+    const parts = [d.windows?.available ? t('s.github.windowsFound') : t('s.github.windowsMissing')];
+    distros.forEach((w) => parts.push(w.name + ': ' + (w.available ? t('s.github.ghFound') : t('s.github.ghMissing'))));
+    state.textContent = parts.join(' · ');
+  } catch (_) {
+    state.textContent = t('s.github.unavailable');
+  }
 }
 
 async function load() {
@@ -3234,7 +3275,7 @@ async function load() {
   // baseline is taken after they ran: otherwise a freshly loaded page already counts as unsaved, and Revert can never
   // get back to a clean state
   saved = JSON.stringify(cfg);
-  changed(); loadInfo(); loadPhones();
+  changed(); loadInfo(); loadPhones(); loadGitHubSources();
 }
 
 // one save at a time: pressing Save or Ctrl/Cmd+S again while it runs joins the save in flight, and the busy
@@ -3268,6 +3309,7 @@ async function doSave() {
 }
 
 $('save').onclick = save;
+$('ghRefresh').onclick = loadGitHubSources;
 $('revert').onclick = () => { cfg = JSON.parse(saved); renderPages(); renderDeck(); renderRules(); renderCalendars(); renderFeeds(); renderCameras(); renderConsole(); renderNetAdapters(); renderPhones(); renderCharge(); bindForm(); changed(); };
 // Over USB this also wakes the phone and brings the panel to the front (adb); over Wi-Fi the phone switches to the
 // page selected in the editor through the live stream.

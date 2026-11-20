@@ -22,13 +22,14 @@ public sealed partial class ControlDeck
     {
         if (!Regex.IsMatch(action.Target, @"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z")
             || !Regex.IsMatch(action.Argument ?? "", @"\A[A-Za-z0-9_.-]+\z")) return new(false, "Configure a repository and workflow filename");
-        var gh = ToolProcess.Find("gh"); if (gh is null) return new(false, "Install and sign in to GitHub CLI on the computer");
-        var start = new ProcessStartInfo(gh);
-        foreach (var arg in new[] { "workflow", "run", action.Argument!, "--repo", action.Target }) start.ArgumentList.Add(arg);
-        if (!string.IsNullOrWhiteSpace(action.Device)) { start.ArgumentList.Add("--ref"); start.ArgumentList.Add(action.Device); }
-        var result = await ToolProcess.RunAsync(start, TimeSpan.FromSeconds(20), ct);
+        var source = (await GitHubSources.DiscoverAsync(_config.Get().GitHub, ct)).FirstOrDefault();
+        if (source is null) return new(false, "Install and sign in to GitHub CLI (gh)");
+        var args = new List<string> { "workflow", "run", action.Argument!, "--repo", action.Target };
+        if (!string.IsNullOrWhiteSpace(action.Device)) { args.Add("--ref"); args.Add(action.Device); }
+        var start = GitHubSources.Start(source, [.. args]);
+        var result = await ToolProcess.RunAsync(start, TimeSpan.FromSeconds(source.IsWsl ? 40 : 20), ct);
         _actionResults[action.Id] = result.ExitCode == 0 ? "Workflow dispatched" : "Dispatch failed";
-        return new(result.ExitCode == 0, result.ExitCode == 0 ? null : "GitHub refused the workflow; check the computer's GitHub CLI account");
+        return new(result.ExitCode == 0, result.ExitCode == 0 ? null : "GitHub refused the workflow; check the signed-in account in " + source.Name);
     }
     private async Task<DeckResult> RouteAudio(DeckAction action, CancellationToken ct)
     {
@@ -117,7 +118,7 @@ public sealed partial class ControlDeck
             available = OperatingSystem.IsWindows() || state is not null;
             state ??= OperatingSystem.IsWindows() ? "Playback unavailable" : "Install ffplay, mpv, or vlc";
         }
-        if (action.Kind == "workflow" && ToolProcess.Find("gh") is null) { available = false; state = "Install GitHub CLI"; }
+        if (action.Kind == "workflow" && !GitHubSources.LikelyAvailable(_config.Get().GitHub)) { available = false; state = "Install GitHub CLI"; }
         if (action.Kind == "playlist" && string.IsNullOrWhiteSpace(_config.Get().Controls.SpotifyClientId) && string.IsNullOrWhiteSpace(_config.Get().Controls.SpotifyToken)) { available = false; state = "Connect Spotify in desktop settings"; }
         if (action.Kind == "midi" && (!int.TryParse(action.Device, out var midiPort) || !_midi.Any(p => p.Id == midiPort.ToString()))) { available = false; state = "MIDI port unavailable"; }
         if (action.Kind is "app" or "project" or "shortcut" or "focus")

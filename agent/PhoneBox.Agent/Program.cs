@@ -822,6 +822,11 @@ app.MapGet("/api/quotas", (QuotaMonitor q) => Results.Json(new { providers = q.S
 
 app.MapGet("/api/work", (SessionMonitor s, GitHubMonitor gh) => Results.Json(WorkFeed.Build(s, gh)));
 
+// Settings › GitHub: what the widget could read right now. Checking is allowed to touch every running WSL distro,
+// which is why it is a separate request instead of part of the three-minute poll.
+app.MapGet("/api/github/sources", async (ConfigStore cfg, CancellationToken ct) =>
+    Results.Json(GitHubSources.Json(await GitHubSources.InspectAsync(cfg.Get().GitHub, all: true, ct))));
+
 app.MapGet("/api/proxy", (string? url, CancellationToken ct) => WidgetFeedProxy.FetchAsync(url, ct));
 
 app.MapGet("/api/procs", (ProcessMonitor procs, int? top) =>

@@ -81,7 +81,7 @@ manifests on Windows, not playlist webpages.
 | Virtual mixer | Install/start Voicemeeter and set the path to its matching 64-bit Remote DLL | Measured Strip/Bus gain and toggle values; missing engine/DLL displays unavailable. Third-party binaries are not bundled. |
 | MIDI | Choose an actual output port ID | Wire-order channel message bytes, e.g. `B0 07 {value}`. Values 0–127. Note pads send note-off after 120 ms. SysEx is excluded. |
 | OSC | Configure host:port and address such as `/volume` | Sends the binding's whole-number value as one float argument using network byte order. UDP delivery is not an acknowledgment from the receiving device. |
-| GitHub workflows | Install/sign in to `gh`; configure owner/repo, workflow filename and optional ref | Dispatch success means accepted by GitHub CLI, not a completed workflow. |
+| GitHub workflows | Install/sign in to `gh` on Windows or in a running WSL distro (the first install Settings › General › GitHub allows is used); configure owner/repo, workflow filename and optional ref | Dispatch success means accepted by GitHub CLI, not a completed workflow. |
 | Services | Configure the actual Windows service name and start/stop/restart | Reads real service state; restart waits for stop/start state transitions. Permission failures are reported. |
 | Docker / Home Assistant | Configure their existing integrations and widget control permissions | Existing container and entity/scene controls remain available; no duplicate daemon or account is introduced. |
 
