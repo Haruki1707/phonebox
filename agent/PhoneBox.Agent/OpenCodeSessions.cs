@@ -81,14 +81,30 @@ internal static class OpenCodeSessions
         return list.OrderByDescending(s => s.Since).Take(MaxSessions).ToList();
     }
 
-    /// <summary>Every service.json OpenCodeServices watches that parses; tests hand their own list.</summary>
+    /// <summary>Every service.json OpenCodeServices watches that parses; tests hand their own list. Re-scanned at
+    /// most every ServiceScanMs: each scan is a fresh running-check followed by the share enumeration and reads, so
+    /// no share is touched for a distro whose running status is older than that scan. Between scans the parsed list
+    /// is reused — the reads it feeds are plain HTTP to the services themselves, which never wakes a stopped distro.</summary>
     private static List<OpenCodeApprovals.ServiceInfo> Services(bool wslEnabled = false)
     {
-        var list = new List<OpenCodeApprovals.ServiceInfo>();
-        foreach (var path in OpenCodeServices.Discover(wslEnabled: wslEnabled))
-            if (OpenCodeApprovals.ReadService(path) is { } service) list.Add(service);
-        return list;
+        lock (ServicesLock)
+        {
+            if (Environment.TickCount64 >= _nextServiceScan)
+            {
+                _nextServiceScan = Environment.TickCount64 + ServiceScanMs;
+                var list = new List<OpenCodeApprovals.ServiceInfo>();
+                foreach (var path in OpenCodeServices.Discover(wslEnabled: wslEnabled))
+                    if (OpenCodeApprovals.ReadService(path) is { } service) list.Add(service);
+                _cachedServices = list;
+            }
+            return [.. _cachedServices];
+        }
     }
+
+    private const int ServiceScanMs = 15_000;
+    private static readonly object ServicesLock = new();
+    private static long _nextServiceScan = -ServiceScanMs; // the first scan goes out at once
+    private static List<OpenCodeApprovals.ServiceInfo> _cachedServices = [];
 
     internal static async Task<List<AgentSession>> ReadServiceAsync(HttpClient http,
         OpenCodeApprovals.ServiceInfo service, long cutoff, CancellationToken ct, long? nowMs = null, bool titles = false)
@@ -164,7 +180,7 @@ internal static class OpenCodeSessions
     }
 
     // session ids look like ses_<random>; the tail is enough to tell two chats with the same title apart
-    private static string ShortId(string id) => id.Length > 6 ? id[^6..] : id;
+    internal static string ShortId(string id) => id.Length > 6 ? id[^6..] : id;
 
     private static JsonElement? Obj(JsonElement e, string p) =>
         e.ValueKind == JsonValueKind.Object && e.TryGetProperty(p, out var v) && v.ValueKind == JsonValueKind.Object ? v : null;

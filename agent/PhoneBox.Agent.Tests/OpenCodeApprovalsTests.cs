@@ -480,6 +480,34 @@ public sealed class OpenCodeApprovalsTests : IDisposable
         Assert.Null(OpenCodeApprovals.ReadService(write("""{"url":"not a url","password":"pw"}""")));
     }
 
+    /// <summary>An answerable card whose answer literally reads "skip" — a choice named that, or a typed one on a
+    /// custom field — is an answer and goes back to OpenCode; only a card with nothing to tap or type is dismissed.</summary>
+    [Fact]
+    public async Task AnAnswerValuedSkipIsAnAnswerRatherThanADismissal()
+    {
+        var form = """{"data":[{"id":"frm_8","sessionID":"ses_1","title":"Questions","fields":[{"key":"q0","title":"Next","description":"What next?","type":"string","custom":true}]}]}""";
+        var fake = new FakeOpenCode(ProjDir) { QueueJson = """{"data":[]}""", FormsJson = form };
+        var store = new ApprovalStore(_events, NullLogger<ApprovalStore>.Instance, _clock);
+        var monitor = Monitor(store, fake);
+        await monitor.PollOnceAsync(CancellationToken.None);
+        var a = Assert.Single(store.Snapshot());
+        Assert.True(a.Custom); // the phone could have typed "skip" as a real answer
+        Assert.True(store.Decide(a.Id, "answer", "skip"));
+        await WaitUntil(() => fake.FormReplies.Count == 1, "the typed answer never reached the form");
+        Assert.Equal("""{"answer":{"q0":"skip"}}""", fake.FormReplies[0]);
+
+        // the same for a fixed choice that is named "skip"
+        var choices = """{"data":[{"id":"frm_9","sessionID":"ses_1","title":"Questions","fields":[{"key":"q0","title":"Next","type":"string","options":[{"value":"skip","label":"Skip this"},{"value":"go","label":"Go on"}]}]}]}""";
+        fake.FormsJson = choices;
+        var store2 = new ApprovalStore(_events, NullLogger<ApprovalStore>.Instance, _clock);
+        var monitor2 = Monitor(store2, fake);
+        await monitor2.PollOnceAsync(CancellationToken.None);
+        var b = Assert.Single(store2.Snapshot());
+        Assert.True(store2.Decide(b.Id, "answer", "skip"));
+        await WaitUntil(() => fake.FormReplies.Count == 2, "the choice never reached the form");
+        Assert.Equal("""{"answer":{"q0":"skip"}}""", fake.FormReplies[1]);
+    }
+
     /// <summary>A Claude question card has no answers to tap: a typed answer is not an answer it takes, so the
     /// question stays waiting and Claude Code asks in the terminal.</summary>
     [Fact]

@@ -77,6 +77,8 @@ public sealed class OpenCodeApprovals : BackgroundService
     private readonly Dictionary<string, ServiceState> _services = new(); // by service.json path
     // the stamps are also read on a 401 (GetAsync runs on the parallel queue reads' threads), so they are concurrent
     private readonly ConcurrentDictionary<string, (long Length, DateTime Written)> _stamps = new(); // by service.json path
+    private long _pathsRound;                            // bumped whenever _paths is rebuilt by a discovery round
+    private readonly Dictionary<string, long> _wslReadRound = new(); // wsl paths already read in the current round
     private List<string> _paths = [];                    // the service.json files watched
     private long _nextPathScan;
 
@@ -259,14 +261,20 @@ public sealed class OpenCodeApprovals : BackgroundService
                 Custom: single?.Custom == true);
             // AskAsync emits the offer, waits, and returns the picked answer (or null once the window is over)
             var answer = await _approvals.AskAsync(approval, ct);
-            if (answer == "skip")
+            if (single is not { Options.Length: > 0 } && single?.Custom != true)
             {
-                // "Got it": the phone has nothing to tap and the answer belongs to the PC. Nothing goes back to
-                // OpenCode, and the same form is not offered again every poll while it stays queued.
-                _dismissed[key] = 1;
-                _log.LogDebug("opencode question {Id}: dismissed on the phone; the PC answers", form.Id);
+                // nothing to tap and nothing to type: the only decision the store takes for such a card is "Got it",
+                // which means "seen, answered at the PC" — nothing goes back to OpenCode, and the form is not
+                // offered again on every poll while it stays queued
+                if (answer == "skip")
+                {
+                    _dismissed[key] = 1;
+                    _log.LogDebug("opencode question {Id}: dismissed on the phone; the PC answers", form.Id);
+                }
                 return;
             }
+            // an answerable card: whatever the value is goes back, even when it literally reads "skip" — a choice
+            // named that, or a typed one, is an answer, not a dismissal
             if (answer is { } value && single is { } field)
                 await ReplyFormAsync(form, service, field, value, CancellationToken.None); // deliver a taken answer even if withdrawn
         }
@@ -321,32 +329,25 @@ public sealed class OpenCodeApprovals : BackgroundService
     /// <summary>
     /// Re-reads every watched service.json when it changed, so a restarted service (new port and password) is picked
     /// up, and services appearing or disappearing (WSL distros starting and stopping) are noticed. Tracked per
-    /// service.json file, so a native and a WSL service that happen to share a port stay two services.
+    /// service.json file, so a native and a WSL service that happen to share a port stay two services. WSL files are
+    /// the exception: they are only read in the discovery round that just verified their distro running, and never
+    /// stat or re-read between rounds — a share touch would wake a distro that has stopped since.
     /// </summary>
     private List<ServiceState> CurrentServices(bool watchWsl)
     {
         if (Environment.TickCount64 >= _nextPathScan)
         {
             _nextPathScan = Environment.TickCount64 + PathScanMs;
-            try { _paths = _servicePaths is { Length: > 0 } fixed_ ? [.. fixed_] : OpenCodeServices.Discover(wslEnabled: watchWsl); }
+            try
+            {
+                _paths = _servicePaths is { Length: > 0 } fixed_ ? [.. fixed_] : OpenCodeServices.Discover(wslEnabled: watchWsl);
+                _pathsRound++;
+                foreach (var p in _wslReadRound.Keys.Where(p => !_paths.Contains(p)).ToList()) _wslReadRound.Remove(p);
+            }
             catch (Exception ex) { _log.LogDebug("opencode services: {Msg}", ex.Message); }
         }
-        var seen = new HashSet<string>();
-        foreach (var path in _paths)
+        void Track(string path, ServiceInfo read)
         {
-            if (!File.Exists(path)) { _stamps.TryRemove(path, out _); continue; }
-            var info = new FileInfo(path);
-            var stamp = (info.Length, info.LastWriteTimeUtc);
-            if (_stamps.TryGetValue(path, out var known) && stamp == known)
-            {
-                // unchanged, and already tracked: keep it (and mark it seen, or the sweep below would drop it)
-                if (_services.ContainsKey(path)) seen.Add(path);
-                continue;
-            }
-            var read = ReadService(path);
-            _stamps[path] = read is null ? default : stamp; // unreadable (perhaps still being written): retry next pass
-            if (read is null) continue;
-            seen.Add(path);
             if (!_services.TryGetValue(path, out var state))
             {
                 state = new ServiceState { Info = read, Path = path };
@@ -361,6 +362,37 @@ public sealed class OpenCodeApprovals : BackgroundService
                 state.Info = read;
                 state.Reauth = false;
             }
+        }
+        var seen = new HashSet<string>();
+        foreach (var path in _paths.ToArray())
+        {
+            if (path.Contains("wsl.localhost", StringComparison.OrdinalIgnoreCase))
+            {
+                // the round that returned this path just verified the distro running, so reading it now is safe;
+                // once per round is the rule — stat or re-read later would touch the share and wake a distro that
+                // has stopped since. A 401 clears the round mark so the next pass re-reads at once.
+                seen.Add(path);
+                if (_wslReadRound.TryGetValue(path, out var readRound) && readRound == _pathsRound) continue;
+                _wslReadRound[path] = _pathsRound;
+                var wslRead = ReadService(path);
+                if (wslRead is null) { _paths.Remove(path); _services.Remove(path); _wslReadRound.Remove(path); continue; }
+                Track(path, wslRead);
+                continue;
+            }
+            if (!File.Exists(path)) { _stamps.TryRemove(path, out _); continue; }
+            var info = new FileInfo(path);
+            var stamp = (info.Length, info.LastWriteTimeUtc);
+            if (_stamps.TryGetValue(path, out var known) && stamp == known)
+            {
+                // unchanged, and already tracked: keep it (and mark it seen, or the sweep below would drop it)
+                if (_services.ContainsKey(path)) seen.Add(path);
+                continue;
+            }
+            var read = ReadService(path);
+            _stamps[path] = read is null ? default : stamp; // unreadable (perhaps still being written): retry next pass
+            if (read is null) continue;
+            seen.Add(path);
+            Track(path, read);
         }
         foreach (var path in _services.Keys.Where(path => !seen.Contains(path)).ToList()) _services.Remove(path);
         return _services.Values.ToList();
@@ -492,6 +524,7 @@ public sealed class OpenCodeApprovals : BackgroundService
         {
             state.Reauth = true;
             _stamps.TryRemove(state.Path, out _); // the service.json changed underneath us: read it again
+            _wslReadRound.Remove(state.Path);     // (wsl files are read once per discovery round; this re-reads sooner)
         }
         return res;
     }

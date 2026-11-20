@@ -198,6 +198,14 @@ public sealed class SessionTitleTests : IDisposable
         var (first2, second2) = (Assert.Single(monitor.Snapshot(), s => s.Tool == "claude"), Assert.Single(monitor.Snapshot(), s => s.Tool == "opencode"));
         Assert.Null(first2.Title);
         Assert.Equal(Title, second2.Title);
+
+        // OpenCode unshared again (the row still carries the stale title in Name until the refresh): the title is
+        // stripped from both Title and Name; Claude's switch is untouched by this config (off by default here)
+        File.WriteAllText(path, """{"opencode":{"shareSessionTitles":false}}""");
+        var (first3, second3) = (Assert.Single(monitor.Snapshot(), s => s.Tool == "claude"), Assert.Single(monitor.Snapshot(), s => s.Tool == "opencode"));
+        Assert.Null(first3.Title);
+        Assert.Null(second3.Title);
+        Assert.Equal("ses_1", second3.Name); // the short id the reader uses, never the title
     }
 
     public void Dispose() { try { Directory.Delete(_root, true); } catch { } }

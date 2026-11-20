@@ -7,24 +7,19 @@ namespace PhoneBox.Agent;
 /// Where OpenCode's background-service announcements (~/.local/state/opencode/service.json) are watched. Besides the
 /// native one, OpenCode inside WSL is served exactly like the native one (sessions, permission prompts, agent
 /// questions) — but only for distros that are already running, and only while the user turned WSL watching on: a
-/// stopped distro must never be started for a file check, and merely statting a path under \\wsl.localhost would do
-/// exactly that. Which distros are running is therefore asked with `wsl.exe --list --running`, a query that does not
-/// touch the VM, and the answer is cached for a minute — the registry's State flag would not do, since it says
-/// "installed", not "running".
+/// stopped distro must never be started for a check. Every WSL discovery round therefore asks `wsl.exe --list
+/// --running` first — a query that does not touch the VM — and enumerates the shares only for the roots it just
+/// returned; no cached membership ever authorizes touching a share. Callers rate-limit how often a round runs.
 /// </summary>
 internal static class OpenCodeServices
 {
     private const int MaxDistros = 8;   // more WSL distros than anyone runs OpenCode in
     private const int MaxUsers = 8;     // per distro
-    private const int CacheMs = 60_000; // how long the running-distro list is trusted
-
-    private static long _nextScan = -CacheMs; // the first ask goes out at once
-    private static string[] _cachedRoots = [];
 
     /// <summary>
     /// Every service.json path worth watching: the native one first (the file may not exist yet — OpenCode writes it
     /// when it starts), then each running distro's users'. The WSL roots come from the caller in tests; null means
-    /// <see cref="RunningWslDistroRoots"/>, and <paramref name="wslEnabled"/> turns the whole WSL half off.
+    /// a fresh <see cref="ScanRunningDistroRoots"/> round, and <paramref name="wslEnabled"/> turns the WSL half off.
     /// </summary>
     internal static List<string> Discover(string? homeDir = null, string? xdgStateHome = null, string? localAppData = null,
         IReadOnlyList<string>? wslDistroRoots = null, bool wslEnabled = true)
@@ -33,7 +28,7 @@ internal static class OpenCodeServices
         var native = OpenCodeApprovals.ServicePath(homeDir, xdgStateHome, localAppData);
         if (native is not null) paths.Add(native);
         if (!wslEnabled) return paths;
-        var roots = wslDistroRoots ?? RunningWslDistroRoots();
+        var roots = wslDistroRoots ?? ScanRunningDistroRoots();
         foreach (var root in roots.Take(MaxDistros))
         {
             try
@@ -52,15 +47,11 @@ internal static class OpenCodeServices
         return paths;
     }
 
-    /// <summary>The \\wsl.localhost root of each running distro, cached for a minute so the query stays rare.</summary>
-    internal static string[] RunningWslDistroRoots()
-    {
-        if (Environment.TickCount64 < _nextScan) return _cachedRoots;
-        _nextScan = Environment.TickCount64 + CacheMs;
-        _cachedRoots = ScanRunningDistroRoots();
-        return _cachedRoots;
-    }
-
+    /// <summary>
+    /// The \\wsl.localhost root of each distro that is running right now, from a fresh `wsl.exe --list --running`:
+    /// the answer is only good for the share accesses this same round makes immediately after it, so callers keep
+    /// their own cadence instead of reusing roots from an earlier round — a distro may have stopped since.
+    /// </summary>
     internal static string[] ScanRunningDistroRoots()
     {
         if (!OperatingSystem.IsWindows()) return [];
@@ -85,11 +76,20 @@ internal static class OpenCodeServices
             };
             using var p = Process.Start(psi);
             if (p is null) return null;
-            var output = p.StandardOutput.ReadToEnd(); // wsl.exe pipes UTF-16; ParseRunningDistros drops the NULs
-            if (!p.WaitForExit(5000)) { try { p.Kill(); } catch (Exception) { } return null; }
-            return output;
+            // Drained asynchronously, so a wsl.exe that hangs with stdout open cannot block past the deadline
+            // below — a synchronous ReadToEnd would wait forever before the timeout even runs. A complete
+            // --list --running answer is a few hundred bytes and lands long before the deadline; whatever has
+            // arrived by then is what gets parsed.
+            var read = p.StandardOutput.ReadToEndAsync();
+            if (!p.WaitForExit(5000))
+            {
+                try { p.Kill(entireProcessTree: true); } catch (Exception) { }
+                read.Wait(1000); // let the reader finish so the handles close; the output is not used
+                return null;
+            }
+            return read.GetAwaiter().GetResult(); // the process has exited: the pipe closes and the read completes
         }
-        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or AggregateException)
         {
             return null; // no WSL installed, or the query could not start
         }

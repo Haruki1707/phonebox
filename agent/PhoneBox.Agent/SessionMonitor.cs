@@ -41,7 +41,9 @@ public sealed class SessionMonitor(ILogger<SessionMonitor> log, ConfigStore? con
     /// The sessions, for everything that sends them anywhere (the live stream, /api/work, the rules). This is the one
     /// place they leave this class, so the title settings are applied here: Claude Code's chats carry a title only
     /// while Settings › Claude Code › "Show session titles on the phone" is on, and OpenCode's only while
-    /// Settings › General › "Show OpenCode session titles" is on.
+    /// Settings › General › "Show OpenCode session titles" is on. An OpenCode row whose sharing was just turned off
+    /// also loses the title from its Name — the reader puts the short session id there when titles are off, and the
+    /// next monitor refresh (about two seconds) does the same; until then this keeps the title off the phone.
     /// </summary>
     public IReadOnlyList<AgentSession> Snapshot()
     {
@@ -53,7 +55,7 @@ public sealed class SessionMonitor(ILogger<SessionMonitor> log, ConfigStore? con
         return all.Select(s => s.Tool switch
         {
             "claude" when !claude => s with { Title = null },
-            "opencode" when !opencode => s with { Title = null },
+            "opencode" when !opencode => s with { Title = null, Name = OpenCodeSessions.ShortId(s.Id["opencode:".Length..]) },
             _ => s,
         }).ToList();
     }
