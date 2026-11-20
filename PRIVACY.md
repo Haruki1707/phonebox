@@ -44,9 +44,9 @@ Last updated: 2026-11-15 (PhoneBox 0.9.6).
   running WSL distro — for its recent sessions: the same local HTTP API the desktop app uses, authenticated with the
   password OpenCode wrote to `~/.local/state/opencode/service.json`; that password never leaves the computer. Only
   session metadata is requested (the folder, title, model, token counters, start and update times and the outcome);
-  prompts, replies and tool arguments are never fetched, OpenCode's database is not opened, and sessions older than
-  three hours are ignored. A stopped WSL distro is never started for this. The data goes only to your phone over the
-  same local USB / paired Wi-Fi link as other panel data.
+  prompts, replies and tool arguments are never fetched, and sessions older than three hours are ignored. A stopped
+  WSL distro is never started for this. The data goes only to your phone over the same local USB / paired Wi-Fi link
+  as other panel data.
 - **OpenCode permission prompts:** when OpenCode's background service asks for permission, the agent reads the pending
   request from its local API (`127.0.0.1`, with the password OpenCode wrote to
   `~/.local/state/opencode/service.json`; that password is never sent anywhere). What goes to the phone is the card's

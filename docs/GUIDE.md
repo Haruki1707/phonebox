@@ -104,7 +104,7 @@ on a page rather than inside a stack.
 **CodexBar** is an optional source: install its `codexbar` CLI on the computer and the agent reads `usage --json`.
 The CodexBar template and quota widget can show every provider reported by the CLI, with configurable provider rotation.
 An optional cost overview shows the last 30 days of spend and tokens; it is off by default.
-Local Claude, Codex, Antigravity and OpenRouter sources keep refreshing when CodexBar is absent, fails, or reports stale data. General settings
+Local Claude, Codex and Antigravity sources keep refreshing when CodexBar is absent, fails, or reports stale data. General settings
 provide defaults; a widget's own options override them, including an empty provider selection.
 Install a compatible CLI from [CodexBar](https://github.com/steipete/CodexBar) if available for your system.
 PhoneBox uses native local sources when no compatible CLI is installed.
@@ -296,12 +296,12 @@ switchable ports). The panel keeps running over Wi-Fi while the USB power is off
   longer after errors and as long as a `429` asks for, across restarts too. An expired or refused token is not sent:
   PhoneBox waits until Claude Code renews it.
 - **Codex quota and sessions** are read from local files in `~/.codex/sessions`; Claude Code sessions from
-  `~/.claude/sessions`. OpenCode sessions are read from its SQLite database `~/.local/share/opencode/opencode.db`,
-  opened read-only: the session's folder, slug, model, token counters, times and outcome, never prompts, replies or
-  tool arguments (the database's account and credential tables are not touched). Cursor sessions (opt-in in
-  **Settings › General › Cursor sessions**) come from recent agent transcripts under
-  `~/.cursor/projects/*/agent-transcripts`. Only the last message's role is kept; chat text is never shown, stored or
-  sent. Project names use the folder basename from Cursor's `workspaceStorage`.
+  `~/.claude/sessions`. OpenCode sessions come from its background service's local HTTP API — the native one and each
+  running WSL distro's — with the password OpenCode wrote to `~/.local/state/opencode/service.json`; only the
+  session's folder, title, model, token counters, times and outcome are read, never prompts, replies or tool
+  arguments. Cursor sessions (opt-in in **Settings › General › Cursor sessions**) come from recent agent transcripts
+  under `~/.cursor/projects/*/agent-transcripts`. Only the last message's role is kept; chat text is never shown,
+  stored or sent. Project names use the folder basename from Cursor's `workspaceStorage`.
 - **Native Antigravity quota:** the agent reads the running Antigravity server's port and CSRF token from its
   process arguments and queries its loopback quota/status API, or invokes the signed-in CLI's structured usage
   command. Only measured quota fields reach the panel; CLI conversation identifiers and token counters are omitted.

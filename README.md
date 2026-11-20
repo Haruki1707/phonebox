@@ -48,14 +48,14 @@ their own layouts, or switch one phone between paired computers.
 | Use it for | What appears on the phone |
 |---|---|
 | **PC monitoring** | CPU, GPU, RAM, disks, network and ping; charts, GPU details and process controls |
-| **AI coding** | Claude, Codex and Antigravity quotas, reset times and burn-rate forecasts; local Claude Code, Codex and OpenCode sessions (OpenCode native and inside WSL); GitHub reviews and CI status |
+| **AI coding** | Claude, Codex and Antigravity quotas, reset times and burn-rate forecasts; local Claude Code, Codex and OpenCode sessions (native and inside WSL); GitHub reviews and CI status |
 | **Touch controls** | App and URL shortcuts, key combinations and macros; application audio, microphone, media, OBS and system controls through [Control Deck](docs/CONTROL-DECK.md) |
 | **Everyday use** | Now Playing, internet radio, clocks, weather, calendars, notes, checklists, pomodoro and timers |
 | **Automation** | Webhook values and notifications, Home Assistant controls and rules that react to activity on the computer |
 
 Tap an AI session for its model, timing and token details. Answer Claude Code and OpenCode permission prompts
-(**Allow**, or **Always allow** for OpenCode, and **Deny**) from the phone. Optional [CodexBar integration](docs/GUIDE.md#widgets) adds quota providers
-and a cost overview.
+(**Allow**, **Deny**, and **Always allow** for OpenCode) from the phone. Optional
+[CodexBar integration](docs/GUIDE.md#widgets) adds quota providers and a cost overview.
 
 <p align="center"><a href="docs/tour-0.6.mp4"><img src="docs/tour-0.6.gif" width="780" alt="PhoneBox tour showing notifications, a Claude Code permission prompt and automatic page switching"></a><br>
 <sub>A tour with demo data: notifications, permission prompts and automatic page switching. <a href="docs/tour-0.6.mp4">Watch the MP4</a></sub></p>

@@ -6,7 +6,7 @@ using System.Text.Json;
 namespace PhoneBox.Agent;
 
 /// <param name="Status">busy | waiting | shell | idle</param>
-/// <param name="Title">The chat's title: Claude Code sends it only while Settings › Claude Code › "Show session titles on the phone" is on; OpenCode always does (its widget label used to be the same text as a slug).</param>
+/// <param name="Title">The chat's title: Claude Code sends it only while Settings › Claude Code › "Show session titles on the phone" is on; OpenCode always does.</param>
 public sealed record AgentSession(string Id, string Tool, string Name, string Project, string Status,
     string? WaitingFor, long Since, long StartedAt, int? Pid = null,
     string? Model = null, string? Effort = null, long? TotalTokens = null, long? InputTokens = null,

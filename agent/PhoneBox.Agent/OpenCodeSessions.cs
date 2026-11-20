@@ -9,9 +9,8 @@ namespace PhoneBox.Agent;
 /// Watches recent OpenCode sessions through its background service's own local HTTP API (GET /api/session, Basic auth
 /// with the password from service.json), on Windows and inside WSL distros alike — see <see cref="OpenCodeServices"/>.
 /// Only the list endpoint is read: the metadata the sessions widget shows (directory, title, model, token counters,
-/// times, outcome). Prompts, replies and tool arguments are never fetched, and the database is not opened, so neither
-/// the file lock on Windows nor the one that breaks over the \\wsl.localhost share matters. A service that is not
-/// running contributes nothing.
+/// times, outcome). Prompts, replies and tool arguments are never fetched, so the request stays small and no chat
+/// content leaves the service. A service that is not running contributes nothing.
 /// </summary>
 internal static class OpenCodeSessions
 {
