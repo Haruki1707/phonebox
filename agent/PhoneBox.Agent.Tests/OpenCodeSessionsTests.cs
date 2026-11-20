@@ -27,11 +27,14 @@ public sealed class OpenCodeSessionsTests : IDisposable
     {
         public string SessionsJson = """{"data":[]}""";
         public string SessionsJsonB = """{"data":[]}""";
+        /// <summary>When set, the "b" service hangs: the reader's own timeout arrives as a cancellation.</summary>
+        public bool HangB;
         public readonly List<string> Calls = [];
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage req, CancellationToken ct)
         {
-            Calls.Add(req.Method.Method + " " + req.RequestUri!.PathAndQuery);
+            lock (Calls) Calls.Add(req.Method.Method + " " + req.RequestUri!.PathAndQuery);
+            if (HangB && req.RequestUri.Authority.Contains(":28999")) return Task.FromCanceled<HttpResponseMessage>(new CancellationToken(true));
             var body = req.RequestUri.PathAndQuery.Contains("/api/session")
                 ? req.RequestUri.Authority switch
                 {
@@ -59,8 +62,8 @@ public sealed class OpenCodeSessionsTests : IDisposable
             + "\"cache\":{\"read\":400,\"write\":10}}}";
     }
 
-    private Task<List<AgentSession>> Read(string url = "http://127.0.0.1:28894") =>
-        OpenCodeSessions.ReadAsync(services: [new OpenCodeApprovals.ServiceInfo(url, "pw", "2.3.2")], nowMs: _now);
+    private Task<List<AgentSession>> Read(string url = "http://127.0.0.1:28894", bool titles = true) =>
+        OpenCodeSessions.ReadAsync(services: [new OpenCodeApprovals.ServiceInfo(url, "pw", "2.3.2")], nowMs: _now, titles: titles);
 
     [Fact]
     public async Task SessionsAreMappedForTheWidget()
@@ -133,8 +136,39 @@ public sealed class OpenCodeSessionsTests : IDisposable
         [
             new OpenCodeApprovals.ServiceInfo("http://127.0.0.1:28894", "pw", "2.3.2"),
             new OpenCodeApprovals.ServiceInfo("http://127.0.0.1:404", "pw", "2.3.2"), // nothing listens there
-        ], nowMs: _now);
+        ], nowMs: _now, titles: true);
         Assert.Single(list);
+    }
+
+    /// <summary>A service that hangs (its own timeout arrives as a cancellation) costs the round nothing: the other
+    /// services' sessions still arrive.</summary>
+    [Fact]
+    public async Task AServiceThatTimesOutDoesNotHideTheOthers()
+    {
+        _fake.HangB = true;
+        _fake.SessionsJson = """{"data":[""" + Session("ses_a", "/home/haruki/w", "Native", _now - 60_000) + """]}""";
+        var list = await OpenCodeSessions.ReadAsync(log: null, services:
+        [
+            new OpenCodeApprovals.ServiceInfo("http://127.0.0.1:28894", "pw", "2.3.2"),
+            new OpenCodeApprovals.ServiceInfo("http://127.0.0.1:28999", "pw2", "2.3.2"), // hangs until the timeout
+        ], nowMs: _now, titles: true);
+        Assert.Single(list);
+        Assert.Equal("opencode:ses_a", list[0].Id);
+    }
+
+    /// <summary>The titles are opt-in: without the switch the row label falls back to the short id and no title is
+    /// carried anywhere.</summary>
+    [Fact]
+    public async Task TitlesStayOffThePhoneUnlessTheyAreShared()
+    {
+        _fake.SessionsJson = """{"data":[""" + Session("ses_a", "/home/haruki/wolfi-os", "Private title", _now - 60_000) + """]}""";
+        var off = Assert.Single(await Read(titles: false));
+        Assert.Null(off.Title);
+        Assert.Equal("ses_a", off.Name); // the short id, never the title
+
+        var on = Assert.Single(await Read(titles: true));
+        Assert.Equal("Private title", on.Title);
+        Assert.Equal("Private title", on.Name);
     }
 
     /// <summary>The privacy contract: the reader speaks to the session list and to nothing else.</summary>
@@ -186,5 +220,19 @@ public sealed class OpenCodeSessionsTests : IDisposable
 
         var nativeOnly = OpenCodeServices.Discover(homeDir: _dir, wslDistroRoots: [wslRoot], wslEnabled: false);
         Assert.Equal([native], nativeOnly);
+    }
+
+    [Fact]
+    public void RunningDistroNamesComeOutOfTheWslListOutput()
+    {
+        // wsl.exe pipes UTF-16: NULs between the characters, a header line with the colon
+        var utf16 = "W\0i\0n\0d\0o\0w\0s\0 \0S\0u\0b\0s\0y\0s\0t\0e\0m\0 \0f\0o\0r\0 \0L\0i\0n\0u\0x\0 \0D\0i\0s\0t\0r\0i\0b\0u\0t\0i\0o\0n\0s\0:\0\r\0\n\0"
+            + "U\0b\0u\0n\0t\0u\0-\02\02\0.\00\04\0\r\0\n\0";
+        Assert.Equal(["Ubuntu-22.04"], OpenCodeServices.ParseRunningDistros(utf16));
+
+        Assert.Equal(["Ubuntu", "Debian"], OpenCodeServices.ParseRunningDistros(
+            "Windows Subsystem for Linux Distributions:\r\nUbuntu (Default)\r\nDebian\r\n"));
+        Assert.Empty(OpenCodeServices.ParseRunningDistros(null));
+        Assert.Empty(OpenCodeServices.ParseRunningDistros(""));
     }
 }

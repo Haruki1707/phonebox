@@ -6,7 +6,7 @@ using System.Text.Json;
 namespace PhoneBox.Agent;
 
 /// <param name="Status">busy | waiting | shell | idle</param>
-/// <param name="Title">The chat's title: Claude Code sends it only while Settings › Claude Code › "Show session titles on the phone" is on; OpenCode always does.</param>
+/// <param name="Title">The chat's title: carried only while the user shares session titles — Claude Code's own setting, or "Show OpenCode session titles" for OpenCode.</param>
 public sealed record AgentSession(string Id, string Tool, string Name, string Project, string Status,
     string? WaitingFor, long Since, long StartedAt, int? Pid = null,
     string? Model = null, string? Effort = null, long? TotalTokens = null, long? InputTokens = null,
@@ -39,16 +39,23 @@ public sealed class SessionMonitor(ILogger<SessionMonitor> log, ConfigStore? con
 
     /// <summary>
     /// The sessions, for everything that sends them anywhere (the live stream, /api/work, the rules). This is the one
-    /// place they leave this class, so the title setting is applied here: Claude Code's chats carry a title only while
-    /// Settings › Claude Code › "Show session titles on the phone" is on, while OpenCode's sessions always carry
-    /// theirs.
+    /// place they leave this class, so the title settings are applied here: Claude Code's chats carry a title only
+    /// while Settings › Claude Code › "Show session titles on the phone" is on, and OpenCode's only while
+    /// Settings › General › "Show OpenCode session titles" is on.
     /// </summary>
     public IReadOnlyList<AgentSession> Snapshot()
     {
         var all = _sessions;
-        return ShareTitles || !all.Any(s => s.Title is not null)
-            ? all
-            : all.Select(s => s.Tool == "claude" ? s with { Title = null } : s).ToList();
+        if (!all.Any(s => s.Title is not null)) return all;
+        var claude = ShareTitles;
+        var opencode = config?.Get().OpenCode.ShareSessionTitles ?? false;
+        if (claude && opencode) return all;
+        return all.Select(s => s.Tool switch
+        {
+            "claude" when !claude => s with { Title = null },
+            "opencode" when !opencode => s with { Title = null },
+            _ => s,
+        }).ToList();
     }
 
     private bool ShareTitles => config?.Get().Claude.ShareSessionTitles ?? false;
@@ -63,7 +70,12 @@ public sealed class SessionMonitor(ILogger<SessionMonitor> log, ConfigStore? con
             var list = new List<AgentSession>();
             try { list.AddRange(ReadClaude(titles: ShareTitles)); } catch (Exception ex) { log.LogDebug("claude sessions: {Msg}", ex.Message); }
             try { list.AddRange(ReadCodex()); } catch (Exception ex) { log.LogDebug("codex sessions: {Msg}", ex.Message); }
-            try { list.AddRange(await OpenCodeSessions.ReadAsync(log, ct, wslEnabled: config?.Get().OpenCode.WatchWsl ?? true)); } catch (Exception ex) { log.LogDebug("opencode sessions: {Msg}", ex.Message); }
+            try
+            {
+                var opencode = config?.Get().OpenCode ?? new OpenCodeConfig();
+                list.AddRange(await OpenCodeSessions.ReadAsync(log, ct, wslEnabled: opencode.WatchWsl, titles: opencode.ShareSessionTitles));
+            }
+            catch (Exception ex) { log.LogDebug("opencode sessions: {Msg}", ex.Message); }
             // Cursor sessions are off until Settings › General › Cursor sessions is enabled.
             if (config?.Get().Cursor.Sessions == true)
             {

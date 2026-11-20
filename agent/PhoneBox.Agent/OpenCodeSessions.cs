@@ -49,9 +49,13 @@ internal static class OpenCodeSessions
         return http;
     }
 
-    /// <summary>The recent sessions of every OpenCode service that is running right now, newest first.</summary>
+    /// <summary>
+    /// The recent sessions of every OpenCode service that is running right now, newest first. One hung service costs
+    /// this round nothing but its own timeout: its sessions are skipped, the others still arrive.
+    /// </summary>
     internal static async Task<List<AgentSession>> ReadAsync(ILogger? log = null, CancellationToken ct = default,
-        IEnumerable<OpenCodeApprovals.ServiceInfo>? services = null, long? nowMs = null, bool wslEnabled = true)
+        IEnumerable<OpenCodeApprovals.ServiceInfo>? services = null, long? nowMs = null, bool wslEnabled = false,
+        bool titles = false)
     {
         var now = nowMs ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var cutoff = now - Hours * 3600_000L;
@@ -60,10 +64,15 @@ internal static class OpenCodeSessions
         {
             try
             {
-                var sessions = await ReadServiceAsync(Http, service, cutoff, ct);
+                var sessions = await ReadServiceAsync(Http, service, cutoff, ct, titles: titles);
                 if (sessions.Count > 0) list.AddRange(sessions.OrderByDescending(s => s.Since).Take(MaxPerService));
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (OperationCanceledException ex)
+            {
+                // the client's own timeout (a service that hangs): this service contributes nothing this round
+                log?.LogDebug("opencode sessions ({Url}): {Msg}", service.Url, ex.Message);
+            }
             catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidOperationException or JsonException)
             {
                 log?.LogDebug("opencode sessions ({Url}): {Msg}", service.Url, ex.Message); // unreachable: contributes nothing this round
@@ -73,7 +82,7 @@ internal static class OpenCodeSessions
     }
 
     /// <summary>Every service.json OpenCodeServices watches that parses; tests hand their own list.</summary>
-    private static List<OpenCodeApprovals.ServiceInfo> Services(bool wslEnabled = true)
+    private static List<OpenCodeApprovals.ServiceInfo> Services(bool wslEnabled = false)
     {
         var list = new List<OpenCodeApprovals.ServiceInfo>();
         foreach (var path in OpenCodeServices.Discover(wslEnabled: wslEnabled))
@@ -82,7 +91,7 @@ internal static class OpenCodeSessions
     }
 
     internal static async Task<List<AgentSession>> ReadServiceAsync(HttpClient http,
-        OpenCodeApprovals.ServiceInfo service, long cutoff, CancellationToken ct, long? nowMs = null)
+        OpenCodeApprovals.ServiceInfo service, long cutoff, CancellationToken ct, long? nowMs = null, bool titles = false)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, service.Url + "/api/session");
         request.Headers.Authorization = new AuthenticationHeaderValue("Basic",
@@ -129,10 +138,12 @@ internal static class OpenCodeSessions
             var model = Obj(e, "model") is { } m ? Str(m, "id") : null;
             var title = Str(e, "title") is { Length: > 0 } raw && raw.Trim().Length > 0 ? raw.Trim() : null;
             if (title is { Length: > SessionMonitor.MaxTitleChars }) title = title[..SessionMonitor.MaxTitleChars];
+            // the title is only carried when the user shares session titles (Settings › General, like Claude's);
+            // without it the widget falls back to the project name, and the Name never carries the title either
             list.Add(new AgentSession(
                 Id: "opencode:" + id,
                 Tool: "opencode",
-                Name: title ?? ShortId(id),
+                Name: titles ? (title ?? ShortId(id)) : ShortId(id),
                 Project: project,
                 Status: busy ? "busy" : "idle",
                 WaitingFor: null,
@@ -147,7 +158,7 @@ internal static class OpenCodeSessions
                 TurnStartedAt: busy ? busyAt : null,
                 Outcome: outcome,
                 LastTool: null, // the last tool lives in the messages, which are never fetched
-                Title: title)); // the widget shows the title as the label with the project folder under it
+                Title: titles ? title : null)); // the widget shows the title as the label with the project folder under it
         }
         return list;
     }

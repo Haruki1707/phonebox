@@ -161,8 +161,43 @@ public sealed class SessionTitleTests : IDisposable
         var card = Assert.Single(approvals.Snapshot());
         Assert.DoesNotContain(Title, JsonSerializer.Serialize(card));
         Assert.Equal("develop-int-61", card.Project);
-        approvals.Decide(card.Id, "skip");
+        approvals.Decide(card.Id, "deny");
         await asking;
+    }
+
+    [Theory]
+    [InlineData(null, false)]   // no setting saved: off
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public void OpenCodeTitlesFollowTheirOwnSwitch(bool? setting, bool titleComesOut)
+    {
+        Directory.CreateDirectory(_root);
+        var path = Path.Combine(_root, "config-oc-" + Guid.NewGuid().ToString("N") + ".json");
+        File.WriteAllText(path, setting is null ? "{}" : "{\"opencode\":{\"shareSessionTitles\":" + (setting.Value ? "true" : "false") + "}}");
+        var oc = new AgentSession("opencode:ses_1", "opencode", "ses_1", "develop-int", "idle", null, 1, 1, Title: Title);
+        var monitor = new SessionMonitor(NullLogger<SessionMonitor>.Instance, new ConfigStore(path)) { Sessions = [oc] };
+        Assert.Equal(titleComesOut ? Title : null, Assert.Single(monitor.Snapshot()).Title);
+    }
+
+    [Fact]
+    public void EachToolKeepsItsOwnTitleSwitch()
+    {
+        Directory.CreateDirectory(_root);
+        var path = Path.Combine(_root, "config-mix-" + Guid.NewGuid().ToString("N") + ".json");
+        // Claude's titles are shared, OpenCode's are not: only the claude row keeps its title
+        File.WriteAllText(path, """{"claude":{"shareSessionTitles":true}}""");
+        var claude = new AgentSession("claude:sess-1", "claude", "develop-int-61", "develop-int", "idle", null, 1, 1, Pid: 7, Title: Title);
+        var opencode = new AgentSession("opencode:ses_1", "opencode", "ses_1", "develop-int", "idle", null, 1, 1, Title: Title);
+        var monitor = new SessionMonitor(NullLogger<SessionMonitor>.Instance, new ConfigStore(path)) { Sessions = [claude, opencode] };
+        var (first, second) = (Assert.Single(monitor.Snapshot(), s => s.Tool == "claude"), Assert.Single(monitor.Snapshot(), s => s.Tool == "opencode"));
+        Assert.Equal(Title, first.Title);
+        Assert.Null(second.Title);
+
+        // the other way round: OpenCode shared, Claude not
+        File.WriteAllText(path, """{"opencode":{"shareSessionTitles":true}}""");
+        var (first2, second2) = (Assert.Single(monitor.Snapshot(), s => s.Tool == "claude"), Assert.Single(monitor.Snapshot(), s => s.Tool == "opencode"));
+        Assert.Null(first2.Title);
+        Assert.Equal(Title, second2.Title);
     }
 
     public void Dispose() { try { Directory.Delete(_root, true); } catch { } }
