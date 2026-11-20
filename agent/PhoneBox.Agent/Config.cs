@@ -46,6 +46,8 @@ public sealed class AgentConfig
     public DiscordConfig Discord { get; set; } = new();
     /// <summary>App console widget: key and dial bindings per app (the phone gets labels and ids, not the keys to press).</summary>
     public ConsoleConfig Console { get; set; } = new();
+    /// <summary>Steam friends presence (the Web API key stays on this computer and is never sent to the phone).</summary>
+    public SteamConfig Steam { get; set; } = new();
 
     /// <summary>The pages a phone shows: its own selection (Settings › Phones), or all of them.</summary>
     public IEnumerable<PageConfig> PagesFor(string? deviceId)
@@ -81,13 +83,13 @@ public sealed class AgentConfig
         shortcuts = Shortcuts.Select(s =>
         {
             var pic = shortcutIcon?.Invoke(s);
-            return new { s.Id, s.Label, s.Icon, s.Color, toggle = s.Toggle || s.Cmd == "builtin:mute", hold = s.LongPress is not null, iconRev = pic?.Rev, iconUpload = pic?.Upload == true };
+            return new { s.Id, s.Label, s.Icon, s.Color, toggle = s.Toggle || s.Cmd == "builtin:mute", hold = s.LongPress is not null, cycle = s.Cmd == "builtin:cycle" && s.Cycle is { Count: > 0 }, iconRev = pic?.Rev, iconUpload = pic?.Upload == true };
         }),
         // names only (for the Rules widget); what a rule matches on stays here
         rules = Rules.Select(r => new { r.Id, r.Name, r.Enabled, r.When }),
         charge = new { Charge.Enabled, Charge.Min, Charge.Max },
         // OpenCode prompts: how long the Allow always button waits before it can be pressed (it saves a pattern)
-        opencode = new { OpenCode.AlwaysCountdownSec, OpenCode.WatchWsl },
+        opencode = new { OpenCode.AlwaysCountdownSec },
     };
 
     /// <summary>Ending processes is allowed when an enabled page has a processes widget that allows it.</summary>
@@ -101,6 +103,18 @@ public sealed class AgentConfig
     /// <summary>True when an enabled page (including enabled Smart Stack children) shows the quota cost overview card.</summary>
     public bool ShowQuotaOverview() => Widgets(enabledPagesOnly: true)
         .Any(w => w.Type is "codexbar" or "quotas" && w.Bool("showOverview") == true);
+
+    /// <summary>True when an enabled page (including enabled Smart Stack children) shows a quota or CodexBar widget that includes Codex.</summary>
+    public bool ShowCodexQuota() => Widgets(enabledPagesOnly: true)
+        .Any(w => w.Type is "codexbar" or "quotas" && WidgetIncludesProvider(w, "codex"));
+
+    private bool WidgetIncludesProvider(WidgetConfig w, string id)
+    {
+        if (w.Opt("providers") is { ValueKind: JsonValueKind.Array } arr)
+            // case-sensitive, as the panel compares them: "CODEX" shows no Codex card, so it starts no polling either
+            return arr.EnumerateArray().Any(e => e.ValueKind == JsonValueKind.String && e.GetString() == id);
+        return CodexBar.Providers.Any(p => p == id);
+    }
 }
 
 public sealed class WeatherConfig
@@ -145,10 +159,11 @@ public sealed class NightConfig
 public sealed class DisplayConfig
 {
     public AppearanceConfig? Appearance { get; set; }
-    /// <summary>UI language code ("auto", "en", "tr", "de", "fr", "es", "it", "pt", "nl", "pl", "ru", "el", "vi", "zh").</summary>
+    /// <summary>UI language code ("auto", "en", "tr", "de", "fr", "es", "it", "pt", "pt-BR", "nl", "pl", "ru", "el", "vi", "zh").</summary>
     public string Language { get; set; } = "auto";
-    /// <summary>The codes the panel and the settings page are translated into (i18n.js).</summary>
-    internal static readonly string[] Languages = ["auto", "en", "tr", "de", "fr", "es", "it", "pt", "nl", "pl", "ru", "el", "vi", "zh"];
+    /// <summary>The codes the panel and the settings page are translated into (i18n.js). Casing matters for pt-BR:
+    /// it is a distinct entry from pt, not a variant of it, so it must survive a save in this exact form.</summary>
+    internal static readonly string[] Languages = ["auto", "en", "tr", "de", "fr", "es", "it", "pt", "pt-BR", "nl", "pl", "ru", "el", "vi", "zh"];
     public bool ShowSeconds { get; set; } = true;
     /// <summary>false ("14:05", default), true ("2:05 PM") or "auto" (follow the phone).</summary>
     [JsonConverter(typeof(Hour12JsonConverter))]
@@ -225,9 +240,9 @@ public sealed class UpdateConfig
 
 public sealed class ClaudeConfig
 {
-    /// <summary>Show Claude Code permission prompts on the phone (needs the hook, see Settings › General).</summary>
+    /// <summary>Show AI coding-agent permission prompts on the phone (needs an agent hook, see Settings › General).</summary>
     public bool PhoneApprovals { get; set; } = true;
-    /// <summary>How long the phone may take before Claude Code asks in the terminal instead.</summary>
+    /// <summary>How long the phone may take before the coding agent asks in its normal UI instead.</summary>
     public int TimeoutSec { get; set; } = 90;
     /// <summary>Let the phone open a Claude Code session's recent messages and steps, read from its chat file on this
     /// computer. They are your prompts and Claude's replies, so this stays off until you turn it on.</summary>
@@ -247,9 +262,11 @@ public sealed class CursorConfig
 
 public sealed class OpenCodeConfig
 {
-    /// <summary>Show OpenCode permission prompts on the phone. Off until Settings › General › OpenCode prompts turns
-    /// it on: letting the phone approve commands is opt-in, like Claude Code's hook install.</summary>
+    /// <summary>Show OpenCode permission prompts on the phone. Off until Settings › General turns it on: letting the
+    /// phone approve commands is opt-in, like Claude Code's hook install.</summary>
     public bool PhoneApprovals { get; set; }
+    /// <summary>Show recent OpenCode sessions on the AI sessions widget (off by default, like Cursor's).</summary>
+    public bool Sessions { get; set; }
     /// <summary>How long the phone may answer before the prompt is left to OpenCode's own window on the desktop.</summary>
     public int TimeoutSec { get; set; } = 90;
     /// <summary>Only use the phone when the PC has been idle for a minute (OpenCode's own prompt is on the screen otherwise).</summary>
@@ -380,6 +397,13 @@ public sealed class DiscordConfig
     public string? ClientSecret { get; set; }
 }
 
+public sealed class SteamConfig
+{
+    public bool Enabled { get; set; }
+    public string? SteamId { get; set; }
+    public string? ApiKey { get; set; }
+}
+
 public sealed class HomeAssistantConfig
 {
     public string? Url { get; set; }
@@ -431,6 +455,9 @@ public sealed class Shortcut
     public string? OffArgs { get; set; }
     /// <summary>Id of another shortcut that a long press on this key runs instead (the phone only says "held"; the id is looked up here).</summary>
     public string? LongPress { get; set; }
+    /// <summary>builtin:cycle: ids of the shortcuts to run one after another, a tap each; the key shows the one that ran last.</summary>
+    public List<string>? Cycle { get; set; }
+    public const int MaxCycle = 20;
 }
 
 /// <summary>Reads/writes config.json; external edits are picked up on the next request.</summary>
@@ -439,7 +466,7 @@ public sealed partial class ConfigStore(string path)
     /// <summary>Pages a fresh install (or an empty page list) starts with.</summary>
     public static readonly string[] DefaultPages = ["home", "ai", "work", "system", "procs", "deck"];
 
-    private static readonly JsonSerializerOptions ReadOpts = new()
+    public static readonly JsonSerializerOptions ReadOpts = new()
     {
         PropertyNameCaseInsensitive = true,
         ReadCommentHandling = JsonCommentHandling.Skip,
@@ -453,6 +480,14 @@ public sealed partial class ConfigStore(string path)
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping, // keep emoji and non-ASCII text readable
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
+
+    /// <summary>Retain a secret redacted from settings GETs when a client sends it back as missing or null.</summary>
+    internal static bool PreserveSteamApiKey(AgentConfig? proposed, string? storedKey)
+    {
+        if (proposed?.Steam is not { ApiKey: null } steam || storedKey is null) return false;
+        steam.ApiKey = storedKey;
+        return true;
+    }
 
     private readonly Lock _lock = new();
     private AgentConfig _config = Normalize(new AgentConfig());
@@ -524,7 +559,12 @@ public sealed partial class ConfigStore(string path)
         var staleIds = Get().Shortcuts.Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
         cfg = Normalize(cfg, staleIds);
         foreach (var s in cfg.Shortcuts)
+        {
             if (string.IsNullOrWhiteSpace(s.Cmd)) return $"Shortcut '{s.Label}' has no command";
+            if (s.Cmd == "builtin:wake" && WakeOnLan.ParseArgs(s.Args, out _, out _) is { } wakeError) return $"Shortcut '{s.Label}': {wakeError}";
+            // a toggle's off action runs through the same path while the toggle is on
+            if (s.OffCmd == "builtin:wake" && WakeOnLan.ParseArgs(s.OffArgs, out _, out _) is { } offWakeError) return $"Shortcut '{s.Label}' (off action): {offWakeError}";
+        }
         if (cfg.Console.Profiles.Count > AppConsole.MaxProfiles) return $"The app console has more than {AppConsole.MaxProfiles} apps";
         foreach (var p in cfg.Console.Profiles)
             if (AppConsole.Validate(p) is { } consoleError) return consoleError;
@@ -575,9 +615,10 @@ public sealed partial class ConfigStore(string path)
         c.Display.Hour12 = Hour12JsonConverter.Normalize(c.Display.Hour12);
         c.Display.IdleReturnSec = Math.Clamp(c.Display.IdleReturnSec, 0, 3600);
         c.Display.IdleDimMin = Math.Clamp(c.Display.IdleDimMin, 0, 1440);
-        // a language the panel does not have falls back to following the phone / browser
-        var lang = (c.Display.Language ?? "").Trim().ToLowerInvariant();
-        c.Display.Language = DisplayConfig.Languages.Contains(lang) ? lang : "auto";
+        // a language the panel does not have falls back to following the phone / browser. Matched case-insensitively
+        // so "PT-br" still resolves, but stored in its canonical casing: i18n.js looks pt-BR up by exact code.
+        var lang = (c.Display.Language ?? "").Trim();
+        c.Display.Language = DisplayConfig.Languages.FirstOrDefault(l => l.Equals(lang, StringComparison.OrdinalIgnoreCase)) ?? "auto";
         c.Display.SwitchCountdownSec = Math.Clamp(c.Display.SwitchCountdownSec, 0, 30);
         c.Display.TouchGraceSec = Math.Clamp(c.Display.TouchGraceSec, 0, 600);
         c.Display.MinDwellSec = Math.Clamp(c.Display.MinDwellSec, 0, 600);
@@ -650,6 +691,15 @@ public sealed partial class ConfigStore(string path)
             s.LongPress = s.LongPress?.Trim();
             if (string.IsNullOrEmpty(s.LongPress) || s.LongPress == s.Id || !c.Shortcuts.Any(o => o.Id == s.LongPress)) s.LongPress = null;
         }
+        // a cycle key: the keys it runs must exist (a deleted or renamed one drops out), and none of them is the cycle itself
+        foreach (var s in c.Shortcuts)
+        {
+            s.Cycle = s.Cmd == "builtin:cycle"
+                ? (s.Cycle ?? []).Select(x => x?.Trim() ?? "").Where(x => x != s.Id && c.Shortcuts.Any(o => o.Id == x)).Take(Shortcut.MaxCycle).ToList()
+                : null;
+            // a cycle key runs the next key, not a command of its own: an on / off setting would bypass the cycle
+            if (s.Cmd == "builtin:cycle") { s.Toggle = false; s.StateKey = null; s.OffCmd = null; s.OffArgs = null; }
+        }
         c.Phones = (c.Phones ?? []).Where(p => p is not null && !string.IsNullOrWhiteSpace(p.Id)).GroupBy(p => p.Id).Select(g => g.First()).Take(20).ToList();
         foreach (var ph in c.Phones)
         {
@@ -663,6 +713,9 @@ public sealed partial class ConfigStore(string path)
         c.Discord ??= new();
         c.Discord.ClientId = string.IsNullOrWhiteSpace(c.Discord.ClientId) ? null : c.Discord.ClientId.Trim();
         c.Discord.ClientSecret = string.IsNullOrWhiteSpace(c.Discord.ClientSecret) ? null : c.Discord.ClientSecret.Trim();
+        c.Steam ??= new();
+        c.Steam.SteamId = string.IsNullOrWhiteSpace(c.Steam.SteamId) ? null : c.Steam.SteamId.Trim();
+        c.Steam.ApiKey = string.IsNullOrWhiteSpace(c.Steam.ApiKey) ? null : c.Steam.ApiKey.Trim();
         if (string.IsNullOrWhiteSpace(c.Obs.Url)) c.Obs.Url = "ws://127.0.0.1:4455";
         c.HomeAssistant ??= new();
         c.HomeAssistant.Url = string.IsNullOrWhiteSpace(c.HomeAssistant.Url) ? null : c.HomeAssistant.Url.Trim().TrimEnd('/');
@@ -691,6 +744,12 @@ public sealed partial class ConfigStore(string path)
         c.Feeds = (c.Feeds ?? []).Where(x => x is not null).Take(30).ToList();
         c.Photos ??= new();
         c.Photos.Folder = (c.Photos.Folder ?? "").Trim() is { Length: > 1024 } longFolder ? longFolder[..1024] : (c.Photos.Folder ?? "").Trim();
+        c.Photos.Source = string.Equals(c.Photos.Source?.Trim(), PhotoFrameConfig.SourceImmich, StringComparison.OrdinalIgnoreCase) ? PhotoFrameConfig.SourceImmich : PhotoFrameConfig.SourceFolder;
+        c.Photos.ImmichUrl = Cap((c.Photos.ImmichUrl ?? "").Trim(), 2048);
+        // a control character (a stray newline from a paste) can't be part of a key, and would break the request header
+        c.Photos.ImmichKey = Cap(new string((c.Photos.ImmichKey ?? "").Where(ch => !char.IsControl(ch)).ToArray()).Trim(), 256);
+        c.Photos.ImmichAlbum = Cap((c.Photos.ImmichAlbum ?? "").Trim(), 64);
+        c.Photos.ImmichAlbumName = Cap((c.Photos.ImmichAlbumName ?? "").Trim(), 200);
         foreach (var f in c.Feeds) { var n = f.Name?.Trim() ?? ""; f.Name = n.Length > 60 ? n[..60] : n; f.Url = f.Url?.Trim() ?? ""; }
         c.Cameras ??= new();
         c.Cameras.Ffmpeg = (c.Cameras.Ffmpeg ?? "").Trim() is { Length: > 1024 } longFfmpeg ? longFfmpeg[..1024] : (c.Cameras.Ffmpeg ?? "").Trim();
@@ -916,6 +975,8 @@ public sealed class CodexBarConfig
     public bool Rotate { get; set; } = true;
     public int PageSize { get; set; } = 2;
     public int RotateInterval { get; set; } = 8;
+    /// <summary>Opt-in: poll live Codex quotas through the local Codex CLI app-server (off by default).</summary>
+    public bool CodexLiveQuota { get; set; }
 }
 
 /// <summary>

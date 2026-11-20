@@ -81,10 +81,10 @@ internal static class OpenCodeSessions
         return list.OrderByDescending(s => s.Since).Take(MaxSessions).ToList();
     }
 
-    /// <summary>Every service.json OpenCodeServices watches that parses; tests hand their own list. Re-scanned at
-    /// most every ServiceScanMs: each scan is a fresh running-check followed by the share enumeration and reads, so
-    /// no share is touched for a distro whose running status is older than that scan. Between scans the parsed list
-    /// is reused — the reads it feeds are plain HTTP to the services themselves, which never wakes a stopped distro.</summary>
+    /// <summary>Every running OpenCode service; tests hand their own list. Re-scanned at most every ServiceScanMs:
+    /// a scan asks OpenCodeServices for the WSL services (whose running-check is fresh) and reads the native
+    /// service.json; between scans the parsed list is reused, so the shares are not touched and the loop's own
+    /// reads stay plain HTTP to the services, which never wakes a stopped distro.</summary>
     private static List<OpenCodeApprovals.ServiceInfo> Services(bool wslEnabled = false)
     {
         lock (ServicesLock)
@@ -93,15 +93,16 @@ internal static class OpenCodeSessions
             {
                 _nextServiceScan = Environment.TickCount64 + ServiceScanMs;
                 var list = new List<OpenCodeApprovals.ServiceInfo>();
-                foreach (var path in OpenCodeServices.Discover(wslEnabled: wslEnabled))
+                foreach (var path in OpenCodeServices.Discover(wslEnabled: false))
                     if (OpenCodeApprovals.ReadService(path) is { } service) list.Add(service);
+                foreach (var (_, service) in OpenCodeServices.WslServices(wslEnabled)) list.Add(service);
                 _cachedServices = list;
             }
             return [.. _cachedServices];
         }
     }
 
-    private const int ServiceScanMs = 15_000;
+    private const int ServiceScanMs = 60_000;
     private static readonly object ServicesLock = new();
     private static long _nextServiceScan = -ServiceScanMs; // the first scan goes out at once
     private static List<OpenCodeApprovals.ServiceInfo> _cachedServices = [];

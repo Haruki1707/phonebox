@@ -74,11 +74,13 @@ public sealed class OpenCodeApprovals : BackgroundService
     // forms the phone answered with "Got it" (it cannot answer them): not offered again while they stay queued, so
     // the card does not bounce back every poll; forgotten when the form leaves the queue
     private readonly ConcurrentDictionary<string, byte> _dismissed = new();
+    // requests whose window ran out with no answer: their slot is free, but they are not offered again while they
+    // stay queued (OpenCode's own prompt is on the desktop); forgotten when the request leaves the queue
+    private readonly HashSet<string> _expired = new();
     private readonly Dictionary<string, ServiceState> _services = new(); // by service.json path
     // the stamps are also read on a 401 (GetAsync runs on the parallel queue reads' threads), so they are concurrent
     private readonly ConcurrentDictionary<string, (long Length, DateTime Written)> _stamps = new(); // by service.json path
-    private long _pathsRound;                            // bumped whenever _paths is rebuilt by a discovery round
-    private readonly Dictionary<string, long> _wslReadRound = new(); // wsl paths already read in the current round
+    private IReadOnlyList<(string Path, ServiceInfo Info)>? _wslList;  // identity of the last WSL scan's list
     private List<string> _paths = [];                    // the service.json files watched
     private long _nextPathScan;
 
@@ -170,6 +172,7 @@ public sealed class OpenCodeApprovals : BackgroundService
         foreach (var id in _offered.Keys.Where(id => !live.Contains(id)).ToList()) Withdraw(id);
         foreach (var id in _formOffers.Keys.Where(id => !liveForms.Contains(id)).ToList()) WithdrawForm(id);
         foreach (var key in _dismissed.Keys) if (!liveForms.Contains(key)) _dismissed.TryRemove(key, out _);
+        foreach (var id in _expired.Where(id => !live.Contains(id) && !liveForms.Contains(id)).ToList()) _expired.Remove(id);
 
         if (onlyWhenAway && Idle.Seconds() < 60) return; // the desktop prompt is right there; the phone is for away
 
@@ -178,7 +181,7 @@ public sealed class OpenCodeApprovals : BackgroundService
         foreach (var (id, (state, request)) in queues)
         {
             if (_offered.Count >= MaxOffered) break;
-            if (_offered.ContainsKey(id)) continue;
+            if (_offered.ContainsKey(id) || _expired.Contains(id)) continue;
             var cancel = new CancellationTokenSource();
             // called directly, not via Task.Run: AskAsync registers the offer synchronously up to its first await,
             // so the phone's very next list request already sees it
@@ -187,21 +190,31 @@ public sealed class OpenCodeApprovals : BackgroundService
         foreach (var (id, (state, form)) in formQueues)
         {
             if (_formOffers.Count >= MaxOffered) break;
-            if (_formOffers.ContainsKey(id) || _dismissed.ContainsKey(id)) continue;
+            if (_formOffers.ContainsKey(id) || _dismissed.ContainsKey(id) || _expired.Contains(id)) continue;
             var cancel = new CancellationTokenSource();
             _formOffers[id] = (OfferFormAsync(id, form, state.Info, expiresAt, cancel.Token), cancel, expiresAt);
         }
     }
 
-    /// <summary>Drops the entries whose offer has ended — the task finished (answered, withdrawn) or the card's
-    /// window ran out — so the MaxOffered cap counts only the cards that are actually live.</summary>
+    /// <summary>Drops the entries whose offer has ended and remembers the ones whose window ran out: their slot
+    /// frees up for new requests, but the same request is not offered again while it stays queued — OpenCode's own
+    /// prompt is on the desktop, and a card that buzzes back every window is no use to anyone. The memory is
+    /// forgotten when the request leaves the queue.</summary>
     private void FreeEndedOffers()
     {
         var now = _clock.GetUtcNow().ToUnixTimeMilliseconds();
         foreach (var id in _offered.Keys.ToList())
-            if (_offered[id].Task.IsCompleted || _offered[id].ExpiresAt <= now) Withdraw(id);
+        {
+            var (task, _, expiresAt) = _offered[id];
+            if (expiresAt <= now) { Withdraw(id); _expired.Add(id); }
+            else if (task.IsCompleted) _offered.TryRemove(id, out _);
+        }
         foreach (var id in _formOffers.Keys.ToList())
-            if (_formOffers[id].Task.IsCompleted || _formOffers[id].ExpiresAt <= now) WithdrawForm(id);
+        {
+            var (task, _, expiresAt) = _formOffers[id];
+            if (expiresAt <= now) { WithdrawForm(id); _expired.Add(id); }
+            else if (task.IsCompleted) _formOffers.TryRemove(id, out _);
+        }
     }
 
     private async Task OfferAsync(OpenCodePermission req, ServiceInfo service, long expiresAt, int countdownSec, CancellationToken ct)
@@ -209,11 +222,16 @@ public sealed class OpenCodeApprovals : BackgroundService
         try
         {
             var now = _clock.GetUtcNow().ToUnixTimeMilliseconds();
-            var approval = new Approval(req.Id, "OpenCode", req.SessionId, ProjectOf(req.Directory),
-                ToolTitle(req.Action), Detail(req), null, now, expiresAt,
-                Always: true, // OpenCode takes an Allow always: it saves the proposed pattern for the project
-                AlwaysNotBefore: now + Math.Clamp(countdownSec, 0, 60) * 1000L,
-                AlwaysPattern: req.Save is { Length: > 0 } ? string.Join(", ", req.Save) : null);
+            var saves = req.Save is { Length: > 0 };
+            var approval = new Approval(
+                Id: req.Id, Source: "OpenCode", Session: req.SessionId, Project: ProjectOf(req.Directory),
+                Cwd: req.Directory ?? "", Tool: ToolTitle(req.Action), Detail: Detail(req), Description: null,
+                CreatedAt: now, ExpiresAt: expiresAt,
+                // Allow always only when OpenCode proposes what it would save: the card shows the pattern, so the
+                // user can see what they would allow from then on
+                Always: saves,
+                AlwaysNotBefore: saves ? now + Math.Clamp(countdownSec, 0, 60) * 1000L : 0,
+                AlwaysPattern: saves ? string.Join(", ", req.Save!) : null);
             // AskAsync emits the offer to the phone, waits for its decision, and returns null once the window is over
             var decision = await _approvals.AskAsync(approval, ct);
             if (decision is "allow" or "always" or "deny")
@@ -252,9 +270,12 @@ public sealed class OpenCodeApprovals : BackgroundService
         try
         {
             var single = form.Fields.Length == 1 ? form.Fields[0] : null;
-            var approval = new Approval(form.Id, "OpenCode", form.SessionId, ProjectOf(form.Directory),
-                single is { } f && f.Title is { Length: > 0 } t ? t : "OpenCode has a question",
-                FormDetail(form), null, _clock.GetUtcNow().ToUnixTimeMilliseconds(), expiresAt,
+            var approval = new Approval(
+                Id: form.Id, Source: "OpenCode", Session: form.SessionId, Project: ProjectOf(form.Directory),
+                Cwd: form.Directory ?? "",
+                Tool: single is { } f && f.Title is { Length: > 0 } t ? t : "OpenCode has a question",
+                Detail: FormDetail(form), Description: null,
+                CreatedAt: _clock.GetUtcNow().ToUnixTimeMilliseconds(), ExpiresAt: expiresAt,
                 Kind: "question",
                 Options: single is { Options.Length: > 0 } s
                     ? s.Options.Select(o => new ApprovalOption(o.Value, o.Label, o.Description)).ToArray() : null,
@@ -327,23 +348,18 @@ public sealed class OpenCodeApprovals : BackgroundService
     }
 
     /// <summary>
-    /// Re-reads every watched service.json when it changed, so a restarted service (new port and password) is picked
-    /// up, and services appearing or disappearing (WSL distros starting and stopping) are noticed. Tracked per
-    /// service.json file, so a native and a WSL service that happen to share a port stay two services. WSL files are
-    /// the exception: they are only read in the discovery round that just verified their distro running, and never
-    /// stat or re-read between rounds — a share touch would wake a distro that has stopped since.
+    /// Re-reads the native service.json when it changed, so a restarted service (new port and password) is picked
+    /// up, and merges the WSL services from OpenCodeServices' minute-cadence cache. Tracked per service.json file,
+    /// so a native and a WSL service that happen to share a port stay two services. WSL files are only read inside
+    /// a scan that just verified the distros running; between scans neither a stat nor a read touches the share —
+    /// that would wake a distro that has stopped since.
     /// </summary>
     private List<ServiceState> CurrentServices(bool watchWsl)
     {
         if (Environment.TickCount64 >= _nextPathScan)
         {
             _nextPathScan = Environment.TickCount64 + PathScanMs;
-            try
-            {
-                _paths = _servicePaths is { Length: > 0 } fixed_ ? [.. fixed_] : OpenCodeServices.Discover(wslEnabled: watchWsl);
-                _pathsRound++;
-                foreach (var p in _wslReadRound.Keys.Where(p => !_paths.Contains(p)).ToList()) _wslReadRound.Remove(p);
-            }
+            try { _paths = _servicePaths is { Length: > 0 } fixed_ ? [.. fixed_] : OpenCodeServices.Discover(wslEnabled: false); }
             catch (Exception ex) { _log.LogDebug("opencode services: {Msg}", ex.Message); }
         }
         void Track(string path, ServiceInfo read)
@@ -366,19 +382,6 @@ public sealed class OpenCodeApprovals : BackgroundService
         var seen = new HashSet<string>();
         foreach (var path in _paths.ToArray())
         {
-            if (path.Contains("wsl.localhost", StringComparison.OrdinalIgnoreCase))
-            {
-                // the round that returned this path just verified the distro running, so reading it now is safe;
-                // once per round is the rule — stat or re-read later would touch the share and wake a distro that
-                // has stopped since. A 401 clears the round mark so the next pass re-reads at once.
-                seen.Add(path);
-                if (_wslReadRound.TryGetValue(path, out var readRound) && readRound == _pathsRound) continue;
-                _wslReadRound[path] = _pathsRound;
-                var wslRead = ReadService(path);
-                if (wslRead is null) { _paths.Remove(path); _services.Remove(path); _wslReadRound.Remove(path); continue; }
-                Track(path, wslRead);
-                continue;
-            }
             if (!File.Exists(path)) { _stamps.TryRemove(path, out _); continue; }
             var info = new FileInfo(path);
             var stamp = (info.Length, info.LastWriteTimeUtc);
@@ -393,6 +396,23 @@ public sealed class OpenCodeApprovals : BackgroundService
             if (read is null) continue;
             seen.Add(path);
             Track(path, read);
+        }
+        // WSL: the services come from the minute-cadence scan, which verified the distros running right before it
+        // read their service.json files. Between scans the parsed list is reused untouched (no share access); a new
+        // scan list means the files were just re-read, so their states update now.
+        var wsl = OpenCodeServices.WslServices(watchWsl && _servicePaths is null);
+        if (!ReferenceEquals(wsl, _wslList))
+        {
+            _wslList = wsl;
+            foreach (var (path, info) in wsl)
+            {
+                seen.Add(path);
+                Track(path, info);
+            }
+        }
+        else
+        {
+            foreach (var (path, _) in wsl) seen.Add(path);
         }
         foreach (var path in _services.Keys.Where(path => !seen.Contains(path)).ToList()) _services.Remove(path);
         return _services.Values.ToList();
@@ -524,7 +544,8 @@ public sealed class OpenCodeApprovals : BackgroundService
         {
             state.Reauth = true;
             _stamps.TryRemove(state.Path, out _); // the service.json changed underneath us: read it again
-            _wslReadRound.Remove(state.Path);     // (wsl files are read once per discovery round; this re-reads sooner)
+            if (state.Path.Contains("wsl.localhost", StringComparison.OrdinalIgnoreCase))
+                OpenCodeServices.InvalidateWsl(); // the minute-cadence WSL scan re-reads it sooner
         }
         return res;
     }

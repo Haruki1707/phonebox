@@ -72,12 +72,17 @@ public sealed class SessionMonitor(ILogger<SessionMonitor> log, ConfigStore? con
             var list = new List<AgentSession>();
             try { list.AddRange(ReadClaude(titles: ShareTitles)); } catch (Exception ex) { log.LogDebug("claude sessions: {Msg}", ex.Message); }
             try { list.AddRange(ReadCodex()); } catch (Exception ex) { log.LogDebug("codex sessions: {Msg}", ex.Message); }
-            try
+            // OpenCode sessions are off until Settings › General › "Show OpenCode sessions" is enabled; while off,
+            // the service is not read at all — not even the every-2-seconds GET.
+            if (config?.Get().OpenCode.Sessions == true)
             {
-                var opencode = config?.Get().OpenCode ?? new OpenCodeConfig();
-                list.AddRange(await OpenCodeSessions.ReadAsync(log, ct, wslEnabled: opencode.WatchWsl, titles: opencode.ShareSessionTitles));
+                try
+                {
+                    var opencode = config!.Get().OpenCode;
+                    list.AddRange(await OpenCodeSessions.ReadAsync(log, ct, wslEnabled: opencode.WatchWsl, titles: opencode.ShareSessionTitles));
+                }
+                catch (Exception ex) { log.LogDebug("opencode sessions: {Msg}", ex.Message); }
             }
-            catch (Exception ex) { log.LogDebug("opencode sessions: {Msg}", ex.Message); }
             // Cursor sessions are off until Settings › General › Cursor sessions is enabled.
             if (config?.Get().Cursor.Sessions == true)
             {

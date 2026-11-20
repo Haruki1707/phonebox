@@ -5,6 +5,8 @@ namespace PhoneBox.Agent;
 
 /// <param name="Tool">The tool Claude Code wants to use (Bash, Edit, Write, WebFetch, an MCP tool…).</param>
 /// <param name="Detail">What it wants to do: the command, the file path, the URL…</param>
+/// <param name="Tool">The tool the coding agent wants to use (Bash, Edit, Write, WebFetch, an MCP tool…).</param>
+/// <param name="Detail">What it wants to do: the command, the file path, the URL…</param>
 /// <param name="Kind">"permission" (Allow / Deny) or "question" (an agent question; OpenCode's can be answered on the phone).</param>
 /// <param name="Options">For a question: the answers to pick from, in order.</param>
 /// <param name="Custom">For a question: a typed answer is accepted too (OpenCode's "custom" field flag).</param>
@@ -13,7 +15,7 @@ namespace PhoneBox.Agent;
 /// phone's own countdown is a guard rail, not the security check.</param>
 /// <param name="AlwaysPattern">What Allow always would save for the project (OpenCode's proposed pattern), shown on
 /// the card so the user can see what they would allow from then on.</param>
-public sealed record Approval(string Id, string Source, string Session, string Project, string Tool, string Detail,
+public sealed record Approval(string Id, string Source, string Session, string Project, string Cwd, string Tool, string Detail,
     string? Description, long CreatedAt, long ExpiresAt, string Kind = "permission",
     ApprovalOption[]? Options = null, bool Custom = false, bool Always = false,
     long AlwaysNotBefore = 0, string? AlwaysPattern = null);
@@ -22,9 +24,9 @@ public sealed record Approval(string Id, string Source, string Session, string P
 public sealed record ApprovalOption(string Value, string Label, string? Description);
 
 /// <summary>
-/// Permission prompts waiting for an answer from the phone. A Claude Code hook posts the request and waits; the
+/// Permission prompts waiting for an answer from the phone. An AI coding-agent hook posts the request and waits; the
 /// phone shows Allow / Deny and posts the decision back. If no phone is around, or nobody answers in time, the request
-/// ends without a decision and Claude Code asks in the terminal as usual.
+/// ends without a decision and the coding agent asks in its normal UI as usual.
 /// </summary>
 public sealed class ApprovalStore(PushStore events, ILogger<ApprovalStore> log)
 {
@@ -68,7 +70,10 @@ public sealed class ApprovalStore(PushStore events, ILogger<ApprovalStore> log)
         catch (OperationCanceledException) { pending.Decision.TrySetResult(null); return null; }
         finally
         {
-            _pending.TryRemove(a.Id, out _);
+            // Only this ask's own pending entry goes: a withdrawn offer whose id was re-offered in the meantime
+            // must not drop the newer card's pending (same id, newer approval)
+            if (_pending.TryGetValue(a.Id, out var current) && ReferenceEquals(current, pending))
+                _pending.TryRemove(new KeyValuePair<string, Pending>(a.Id, current));
             events.Emit("approval-done", JsonSerializer.SerializeToElement(new { id = a.Id }));
         }
     }
@@ -87,12 +92,16 @@ public sealed class ApprovalStore(PushStore events, ILogger<ApprovalStore> log)
         string? result;
         if (a.Kind == "question")
         {
-            var v = value?.Trim() ?? "";
-            if (v.Length > 500) v = v[..500];
+            var raw = value ?? "";
+            // the card's choices are matched exactly as they were offered (no trimming or capping first); a typed
+            // answer is trimmed and capped for the reply
+            string Typed(string s) { var t = s.Trim(); return t.Length > 500 ? t[..500] : t; }
             if (decision == "skip" && a.Options is not { Length: > 0 } && !a.Custom) result = "skip";
-            else if (decision == "answer" && v.Length > 0
-                && (a.Custom || (a.Options is { Length: > 0 } && Array.Exists(a.Options, o => o.Value == v))))
-                result = v;
+            else if (decision == "answer" && raw.Length > 0
+                && a.Options is { Length: > 0 } opts && Array.Find(opts, o => o.Value == raw) is { } hit)
+                result = hit.Value;
+            else if (decision == "answer" && raw.Length > 0 && a.Custom)
+                result = Typed(raw); // a typed answer — also one that is not among the card's choices
             else result = null;
         }
         else

@@ -40,7 +40,7 @@ Windows, Linux and macOS. No root, PhoneBox account or cloud service required.</
 <sub>Example layouts with demo data.</sub></p>
 
 PhoneBox pairs a full-screen **Android app** with a small **desktop agent**. Build your panel in a browser-based
-visual editor: **124 widgets**, **30 templates**, multiple pages and a live preview. Connect several phones with
+visual editor: **126 widgets**, **30 templates**, multiple pages and a live preview. Connect several phones with
 their own layouts, or switch one phone between paired computers.
 
 ## What you can do
@@ -53,9 +53,8 @@ their own layouts, or switch one phone between paired computers.
 | **Everyday use** | Now Playing, internet radio, clocks, weather, calendars, notes, checklists, pomodoro and timers |
 | **Automation** | Webhook values and notifications, Home Assistant controls and rules that react to activity on the computer |
 
-Tap an AI session for its model, timing and token details. Answer Claude Code and OpenCode permission prompts
-(**Allow**, **Deny**, and **Always allow** for OpenCode) from the phone — each off until you turn it on under
-Settings › General. Optional
+Tap an AI session for its model, timing and token details. Opt in to Codex, Claude Code or OpenCode permission prompts
+to answer **Allow**, **Deny** (and **Always allow** for OpenCode) from the phone. Optional
 [CodexBar integration](docs/GUIDE.md#widgets) adds quota providers and a cost overview.
 
 <p align="center"><a href="docs/tour-0.6.mp4"><img src="docs/tour-0.6.gif" width="780" alt="PhoneBox tour showing notifications, a Claude Code permission prompt and automatic page switching"></a><br>

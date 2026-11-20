@@ -150,11 +150,12 @@ public sealed class OpenCodeApprovalsTests : IDisposable
         Assert.Equal("per_1", a.Id);
         Assert.Equal("OpenCode", a.Source);
         Assert.Equal("pb-proj", a.Project);
+        Assert.Equal(ProjDir, a.Cwd);
         Assert.Equal("ses_1", a.Session);
         Assert.Equal("Run a command", a.Tool);
         Assert.Equal("Push the branch?\n\ngit push -f", a.Detail);
         Assert.Equal("permission", a.Kind);
-        Assert.True(a.Always); // OpenCode prompts offer Allow always (it saves the pattern for the project)
+        Assert.False(a.Always); // no save pattern in the request: the card offers no Allow always
 
         Assert.True(store.Decide("per_1", "allow"));
         await WaitUntil(() => fake.Replies.Count == 1, "the reply never reached OpenCode");
@@ -166,7 +167,8 @@ public sealed class OpenCodeApprovalsTests : IDisposable
     {
         foreach (var (decision, expected) in new[] { ("deny", "reject"), ("always", "always") })
         {
-            var fake = new FakeOpenCode(ProjDir) { QueueJson = QueueOne };
+            // the always case needs a card that offers it: OpenCode's request carries what it would save
+            var fake = new FakeOpenCode(ProjDir) { QueueJson = decision == "always" ? QueueOf(1, save: """["echo *"]""") : QueueOne };
             var store = new ApprovalStore(_events, NullLogger<ApprovalStore>.Instance, _clock);
             var monitor = Monitor(store, fake);
             await monitor.PollOnceAsync(CancellationToken.None);
@@ -311,9 +313,10 @@ public sealed class OpenCodeApprovalsTests : IDisposable
         Assert.Equal("""{"decision":"always"}""", fake.Replies[0]);
     }
 
-    /// <summary>An expired card's slot is free again: the request (still queued in OpenCode) is offered afresh.</summary>
+    /// <summary>An expired card's slot is free for new requests, and the timed-out request does not come back on
+    /// every window — OpenCode's own prompt is on the desktop, and the phone must not buzz every 90 s.</summary>
     [Fact]
-    public async Task TimedOutOffersMakeRoomForNewOnes()
+    public async Task TimedOutOffersMakeRoomForNewOnesWithoutComingBack()
     {
         var fake = new FakeOpenCode(ProjDir) { QueueJson = QueueOf(9) };
         var store = new ApprovalStore(_events, NullLogger<ApprovalStore>.Instance, _clock);
@@ -323,9 +326,19 @@ public sealed class OpenCodeApprovalsTests : IDisposable
 
         _clock.Now += 90_001; // the windows were stamped 90 s out: every card is past its expiry now
         await monitor.PollOnceAsync(CancellationToken.None);
-        var fresh = store.Snapshot();
-        Assert.NotEmpty(fresh);
-        Assert.All(fresh, a => Assert.True(a.ExpiresAt > _clock.Now, "an expired card was still being offered"));
+        // the ninth request (starved by the cap before) takes a freed slot; the eight timed-out ones do not come back
+        await WaitUntil(() => store.Snapshot().Any(a => a.Id == "per_9"), "the starved request never took a freed slot");
+        Assert.DoesNotContain(store.Snapshot(), a => a.Id is "per_1" or "per_2" or "per_8");
+
+        fake.QueueJson = QueueOf(8); // the same eight requests are still queued on OpenCode's side
+        await monitor.PollOnceAsync(CancellationToken.None);
+        Assert.DoesNotContain(store.Snapshot(), a => a.Id is "per_1" or "per_8"); // no buzz every window
+
+        fake.QueueJson = """{"data":[{"id":"per_new","sessionID":"ses_1","action":"edit","resources":["main.rs"]}]}""";
+        await monitor.PollOnceAsync(CancellationToken.None);
+        var fresh = Assert.Single(store.Snapshot());
+        Assert.Equal("per_new", fresh.Id); // a new request takes a slot
+        Assert.All(store.Snapshot(), a => Assert.True(a.ExpiresAt > _clock.Now));
     }
 
     [Fact]
@@ -457,6 +470,7 @@ public sealed class OpenCodeApprovalsTests : IDisposable
         var cfg = new ConfigStore(path).Get();
         Assert.Equal(60, cfg.OpenCode.AlwaysCountdownSec);
         Assert.False(cfg.OpenCode.PhoneApprovals); // off until the settings page turns it on
+        Assert.False(cfg.OpenCode.Sessions);       // sessions are opt-in like Cursor's
         Assert.False(cfg.OpenCode.WatchWsl);       // WSL watching is opt-in too
         Assert.False(cfg.OpenCode.ShareSessionTitles);
     }
@@ -526,5 +540,79 @@ public sealed class OpenCodeApprovalsTests : IDisposable
         Assert.Single(store.Snapshot()); // still waiting: nothing was answered
         cts.Cancel();
         Assert.Null(await hook); // no output: Claude Code asks in the terminal as usual
+    }
+
+    /// <summary>The settings the agent writes carry the section as "opencode" — the key the settings page binds and
+    /// the config files use; the camelCase writer must not turn it into "openCode".</summary>
+    [Fact]
+    public void TheSettingsFileWritesTheSectionAsOpencode()
+    {
+        var json = JsonSerializer.Serialize(new AgentConfig(), ConfigStore.WriteOpts);
+        Assert.Contains("\"opencode\":", json);
+        Assert.DoesNotContain("\"openCode\"", json);
+    }
+
+    /// <summary>A choice value with padding is matched exactly as the card offered it, not after trimming: the
+    /// trimmed text would never hit a value the card carries.</summary>
+    [Fact]
+    public async Task AnAnswerIsMatchedAgainstTheChoicesRaw()
+    {
+        var padded = """{"data":[{"id":"frm_10","sessionID":"ses_1","title":"Questions","fields":[{"key":"q0","title":"Route","type":"string","options":[{"value":" Route B ","label":"Route B"},{"value":"a","label":"Route A"}]}]}]}""";
+        var fake = new FakeOpenCode(ProjDir) { QueueJson = """{"data":[]}""", FormsJson = padded };
+        var store = new ApprovalStore(_events, NullLogger<ApprovalStore>.Instance, _clock);
+        var monitor = Monitor(store, fake);
+        await monitor.PollOnceAsync(CancellationToken.None);
+        var a = Assert.Single(store.Snapshot());
+        Assert.True(store.Decide(a.Id, "answer", " Route B ")); // exactly the value the card offered
+        await WaitUntil(() => fake.FormReplies.Count == 1, "the answer never reached the form");
+        Assert.Equal("""{"answer":{"q0":" Route B "}}""", fake.FormReplies[0]);
+    }
+
+    /// <summary>A withdrawn offer's cleanup must not drop a newer card's pending entry when the same id was
+    /// re-offered in the meantime: the new card has to stay answerable.</summary>
+    [Fact]
+    public async Task AWithdrawnOfferDoesNotDropAReofferedCardsPending()
+    {
+        var store = new ApprovalStore(_events, NullLogger<ApprovalStore>.Instance, _clock);
+        var now = _clock.GetUtcNow().ToUnixTimeMilliseconds();
+        using var first = new CancellationTokenSource();
+        var a1 = new Approval("per_1", "OpenCode", "s", "p", "", "Run a command", "detail", null, now, now + 60_000);
+        var asking1 = store.AskAsync(a1, first.Token);
+        var a2 = new Approval("per_1", "OpenCode", "s", "p", "", "Run a command", "detail", null, now, now + 60_000);
+        var asking2 = store.AskAsync(a2, CancellationToken.None); // the same id, re-offered while the first waits
+        first.Cancel(); // the withdrawn offer's wait ends; its cleanup must not remove the newer pending
+        Assert.Null(await asking1);
+        Assert.True(store.Decide("per_1", "allow"), "the re-offered card lost its pending entry to the withdrawn offer's cleanup");
+        Assert.Equal("allow", await asking2);
+    }
+
+    /// <summary>The WSL default user's home comes from /etc/wsl.conf (or the registry's DefaultUid through
+    /// /etc/passwd); without a resolvable default user the distro is skipped, so other users' homes are never read.
+    /// A full scan reads the default user's service.json only — the other user's is never touched.</summary>
+    [Fact]
+    public void TheDefaultUsersHomeIsResolvedAndOthersAreNotRead()
+    {
+        var share = Path.Combine(_dir, "wsl.localhost") + Path.DirectorySeparatorChar;
+        var root = Path.Combine(_dir, "wsl.localhost", "Ubuntu");
+        var conf = Path.Combine(root, "etc", "wsl.conf");
+        Directory.CreateDirectory(Path.GetDirectoryName(conf)!);
+        File.WriteAllText(conf, "[boot]\nsystemd=true\n\n[user]\ndefault=haruki\n");
+        var passwd = Path.Combine(root, "etc", "passwd");
+        File.WriteAllText(passwd, "root:x:0:0:root:/root:/bin/bash\nharuki:x:1000:1000:Haruki:/home/haruki:/bin/bash\nother:x:1001:1001:Other:/home/other:/bin/zsh\n");
+        Directory.CreateDirectory(Path.Combine(root, "home", "haruki", ".local", "state", "opencode"));
+        Directory.CreateDirectory(Path.Combine(root, "home", "other", ".local", "state", "opencode"));
+        File.WriteAllText(Path.Combine(root, "home", "haruki", ".local", "state", "opencode", "service.json"), """{"url":"http://127.0.0.1:49374","password":"pw","version":"2.3.2"}""");
+        File.WriteAllText(Path.Combine(root, "home", "other", ".local", "state", "opencode", "service.json"), """{"url":"http://127.0.0.1:49375","password":"pw2","version":"2.3.2"}""");
+
+        Assert.Equal("/home/haruki", OpenCodeServices.DefaultUserHome(root, "Ubuntu"));
+        var services = OpenCodeServices.WslServices(enabled: true, distroNames: ["Ubuntu"], shareRoot: share);
+        var mine = Assert.Single(services); // the other user's service is never read
+        Assert.Equal("http://127.0.0.1:49374", mine.Info.Url);
+        Assert.Contains("haruki", mine.Path);
+
+        // without a resolvable default user the distro is skipped entirely
+        var root2 = Path.Combine(_dir, "wsl.localhost", "Debian");
+        Directory.CreateDirectory(Path.Combine(root2, "home", "someone"));
+        Assert.Null(OpenCodeServices.DefaultUserHome(root2, "Debian"));
     }
 }
